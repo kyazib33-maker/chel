@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { brand, finished, newId, useChel } from "../src/lib/chel";
 import { IconButton, StatusDot } from "../src/components/ui";
+import { UpdateNotice } from "../src/components/UpdateNotice";
 
 function ago(t: number) {
   const m = Math.round((Date.now() - t) / 60000);
@@ -36,6 +37,7 @@ export default function Conversations() {
       <IconButton label="⚡" onPress={() => router.push("/activity")} />
       <IconButton label="⚙" onPress={() => router.push("/connect")} />
     </View>
+    <UpdateNotice />
     {status === "offline" && <Text className="mx-4 mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">Não consegui falar com o PC. O Chel está aberto e o Tailscale ligado no celular? {error ? `(${error})` : ""}</Text>}
     {state.working.length > 0 && <Pressable onPress={() => router.push("/activity")} className="mx-4 mb-2 flex-row items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2.5">
       {state.working.slice(0, 3).map((w) => w.provider ? <Text key={w.task_id} style={{ color: brand[w.provider].color }}>{brand[w.provider].glyph}</Text> : null)}

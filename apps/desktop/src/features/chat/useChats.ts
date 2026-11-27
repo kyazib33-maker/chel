@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { cancelTask, defaultWorkspace, desktopBridgeAvailable, launchAgent, onRemoteChatCommand, publishChatState, modelCatalog, readQuotas, recommendAgentRoute, type ModelCatalog, type ProviderId, type ProviderQuota, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
-import { chooseModel, effortFor, finished, names, newChat, prettyModel, readStreams, requestedProvider, titleFrom, type Chat, type Turn } from "./engine";
+import { CHEL_NOTE, chooseModel, effortFor, finished, splitAnswer, names, newChat, prettyModel, readStreams, requestedProvider, titleFrom, type Chat, type Turn } from "./engine";
 
 function load<T>(key: string, fallback: T): T { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) as T : fallback; } catch { return fallback; } }
 function save(key: string, value: unknown) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ } }
@@ -55,15 +55,17 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
 
   // Save answers, conversation ids and real model names into the conversations.
   useEffect(() => {
-    const { replies, sessions, models } = streams;
+    const { replies, sessions, models, finals, denials } = streams;
     const update = (t: Turn): Turn => {
       const last = t.attempts[t.attempts.length - 1];
       if (!last) return t;
-      const live = (replies.get(last.taskId) ?? []).join("\n\n");
+      const { steps, answer: live } = splitAnswer(replies.get(last.taskId) ?? [], finals.get(last.taskId));
       const sid = sessions.get(last.taskId);
       const real = models.get(last.taskId);
+      const blocked = denials.get(last.taskId);
       let next = t;
-      if (live && live !== t.answer) next = { ...next, answer: live };
+      if (live && live !== t.answer) next = { ...next, answer: live, steps };
+      if (blocked && !t.denials) next = { ...next, denials: blocked };
       if ((sid && sid !== last.sessionId) || (real && prettyModel(real) !== last.modelName)) {
         next = { ...next, attempts: next.attempts.map((a, i) => i !== next.attempts.length - 1 ? a : { ...a, sessionId: sid ?? a.sessionId, modelName: real ? prettyModel(real) : a.modelName }) };
       }
@@ -87,14 +89,15 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
       const effort = effortFor(turn.route.complexity);
       const chosen = chooseModel(next, turn.route.complexity, catalog.current, quotasRef.current);
       patchTurn(chat.id, turn.id, (t) => ({ ...t, attempts: [...t.attempts, { provider: next, taskId: "pending", model: chosen.id, modelName: chosen.name }], notes: [...t.notes, `${names[last.provider]} não conseguiu (${why}). Tentando com ${names[next]}…`] }));
-      void launchAgent({ provider: next, prompt: turn.prompt, cwd: turn.cwd || chat.folder || fallbackDir, model: chosen.id, effort, display_name: `${names[next]} · ${chat.title}` })
+      void launchAgent({ provider: next, prompt: turn.prompt, cwd: turn.cwd || chat.folder || fallbackDir, model: chosen.id, effort, display_name: `${names[next]} · ${chat.title}`, add_dirs: chat.grants?.dirs ?? [], allowed_tools: chat.grants?.tools ?? [], system_note: CHEL_NOTE })
         .then((taskId) => patchTurn(chat.id, turn.id, (t) => ({ ...t, attempts: t.attempts.map((a) => a.taskId === "pending" ? { ...a, taskId } : a) })))
         .catch((reason) => patchTurn(chat.id, turn.id, { error: String(reason) }));
     }
   }, [tasks, chats, streams]);
 
-  async function send(chatId: string, prompt: string, forced: ProviderId | "auto") {
-    const chat = chats.find((c) => c.id === chatId);
+  async function send(chatId: string, prompt: string, forced: ProviderId | "auto", grantsOverride?: { dirs: string[]; tools: string[] }) {
+    const found = chats.find((c) => c.id === chatId);
+    const chat = found && grantsOverride ? { ...found, grants: grantsOverride } : found;
     const workDir = chat?.folder.trim() || fallbackDir;
     if (!chat || !prompt.trim() || !workDir || busy[chatId]) return;
     const turnId = crypto.randomUUID();
@@ -127,13 +130,33 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
       }
       // Continue this AI's own earlier conversation in this chat, if there is one.
       const resumeId = lastOf(provider)?.sessionId ?? null;
-      const effort = effortFor(route.complexity);
-      const chosen = chooseModel(provider, route.complexity, catalog.current, quotasRef.current);
-      update({ route: { ...route, provider, model: chosen.id, effort }, notes });
-      const taskId = await launchAgent({ provider, prompt, cwd: workDir, model: chosen.id, effort, display_name: `${names[provider]} · ${chat.title === "Nova conversa" ? titleFrom(prompt) : chat.title}`, resume_id: resumeId });
+      // A short follow-up ("ok", "???") must not drop the conversation to a weaker model.
+      const rank = { low: 0, medium: 1, high: 2 } as const;
+      const before = chat.turns.map((t) => t.route?.complexity).filter(Boolean) as Array<keyof typeof rank>;
+      const complexity = [route.complexity as keyof typeof rank, ...before].reduce((a, b) => (rank[b] ?? 0) > (rank[a] ?? 0) ? b : a, "low" as keyof typeof rank);
+      const effort = effortFor(complexity);
+      const chosen = chooseModel(provider, complexity, catalog.current, quotasRef.current);
+      update({ route: { ...route, complexity, provider, model: chosen.id, effort }, notes });
+      const taskId = await launchAgent({ provider, prompt, cwd: workDir, model: chosen.id, effort, display_name: `${names[provider]} · ${chat.title === "Nova conversa" ? titleFrom(prompt) : chat.title}`, resume_id: resumeId,
+        add_dirs: chat.grants?.dirs ?? [], allowed_tools: chat.grants?.tools ?? [], system_note: CHEL_NOTE });
       update({ attempts: [{ provider, taskId, model: chosen.id, modelName: chosen.name }] });
     } catch (reason) { update({ error: String(reason) }); }
     finally { setBusy((b) => ({ ...b, [chatId]: false })); }
+  }
+
+  /** The user allowed what the AI was blocked from: remember it for this conversation and let the AI continue. */
+  function allowAndRetry(chatId: string, turnId: string) {
+    const chat = chats.find((c) => c.id === chatId);
+    const turn = chat?.turns.find((t) => t.id === turnId);
+    if (!chat || !turn?.denials?.length || turn.retried) return;
+    const grants = { dirs: [...(chat.grants?.dirs ?? [])], tools: [...(chat.grants?.tools ?? [])] };
+    for (const d of turn.denials) {
+      if (d.dir) { if (!grants.dirs.includes(d.dir)) grants.dirs.push(d.dir); if (!["Read", "Glob", "Grep", "LS"].includes(d.tool) && !grants.tools.includes(d.tool)) grants.tools.push(d.tool); }
+      else if (!grants.tools.includes(d.tool)) grants.tools.push(d.tool);
+    }
+    patchChat(chatId, (c) => ({ ...c, grants, turns: c.turns.map((t) => t.id === turnId ? { ...t, retried: true } : t) }));
+    const provider = turn.attempts[turn.attempts.length - 1]?.provider ?? "auto";
+    void send(chatId, "Liberei o acesso. Pode continuar de onde parou.", provider, grants);
   }
 
   function createChat(id?: string, focus = true) {
@@ -161,7 +184,8 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
         return {
           id: t.id, prompt: t.prompt, at: t.at, notes: t.notes, error: t.error,
           provider: last?.provider ?? t.route?.provider ?? null, model: last?.modelName ?? null, effort: t.route?.effort ?? null,
-          answer: (last && (streams.replies.get(last.taskId) ?? []).join("\n\n")) || t.answer || "",
+          answer: (last && splitAnswer(streams.replies.get(last.taskId) ?? [], streams.finals.get(last.taskId)).answer) || t.answer || "",
+          steps: t.steps ?? [], denials: t.denials ?? [], retried: !!t.retried,
           status: task?.status ?? (t.answer ? "succeeded" : null), task_id: last?.taskId ?? null,
         };
       }),
@@ -199,6 +223,7 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
       case "delete_chat": if (chatId) removeChat(chatId); break;
       case "rename_chat": if (chatId && typeof cmd.title === "string") renameChat(chatId, cmd.title); break;
       case "pin_chat": if (chatId) togglePin(chatId); break;
+      case "allow_retry": if (chatId && typeof cmd.turn_id === "string") allowAndRetry(chatId, cmd.turn_id); break;
       case "set_folder": if (chatId && typeof cmd.folder === "string") setFolder(chatId, cmd.folder); break;
       case "cancel": if (typeof cmd.task_id === "string") void cancelTask(cmd.task_id); break;
     }
@@ -210,5 +235,5 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
     return () => { disposed = true; stop?.(); };
   }, []);
 
-  return { chats, active, activeId: active?.id, setActiveId, createChat, removeChat, setFolder, renameChat, togglePin, send, busy, quotas, quotasAt, refreshQuotas, streams, fallbackDir };
+  return { chats, active, activeId: active?.id, setActiveId, createChat, removeChat, setFolder, renameChat, togglePin, send, allowAndRetry, busy, quotas, quotasAt, refreshQuotas, streams, fallbackDir };
 }

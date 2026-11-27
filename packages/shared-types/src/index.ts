@@ -37,6 +37,9 @@ export interface AgentLaunchRequest {
   effort?: string | null;
   display_name?: string | null;
   resume_id?: string | null;
+  add_dirs?: string[];
+  allowed_tools?: string[];
+  system_note?: string | null;
 }
 
 export type TaskEventPayload =

@@ -27,13 +27,15 @@ export function Rich({ text }: { text: string }) {
     const heading = line.match(/^#{1,4}\s+(.*)/);
     const bullet = line.match(/^\s*([-*•]|\d+[.)])\s+(.*)/);
     const content = heading ? heading[1] : bullet ? bullet[2] : line;
+    // Plain style objects (not className): on Android, class-based colors on selectable/nested text
+    // were sometimes lost on re-render, leaving the answer black on black.
     const parts = content.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean).map((p, k) =>
-      p.startsWith("**") ? <Text key={k} className="font-bold text-white">{p.slice(2, -2)}</Text>
-        : p.startsWith("`") ? <Text key={k} className="text-violet-200" style={{ fontFamily: "monospace" }}>{p.slice(1, -1)}</Text>
+      p.startsWith("**") ? <Text key={k} style={{ color: "#ffffff", fontWeight: "700" }}>{p.slice(2, -2)}</Text>
+        : p.startsWith("`") ? <Text key={k} style={{ color: "#ddd6fe", fontFamily: "monospace" }}>{p.slice(1, -1)}</Text>
         : p);
-    return <View key={i} className={bullet ? "flex-row pl-1" : ""}>
-      {bullet ? <Text className="mr-2 text-[15px] text-zinc-500">{/^\d/.test(bullet[1]) ? bullet[1] : "•"}</Text> : null}
-      <Text selectable className={`flex-1 text-[15px] leading-6 ${heading ? "font-bold text-white" : "text-zinc-200"}`}>{parts}</Text>
+    return <View key={i} style={bullet ? { flexDirection: "row", paddingLeft: 4 } : undefined}>
+      {bullet ? <Text style={{ color: "#71717a", fontSize: 15, marginRight: 8 }}>{/^\d/.test(bullet[1]) ? bullet[1] : "•"}</Text> : null}
+      <Text selectable style={{ flex: 1, fontSize: 15, lineHeight: 23, color: heading ? "#ffffff" : "#e4e4e7", fontWeight: heading ? "700" : "400" }}>{parts}</Text>
     </View>;
   })}</View>;
 }

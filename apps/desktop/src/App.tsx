@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { MessageSquarePlus, PanelRightClose, PanelRightOpen, Pin, Puzzle, ShieldCheck, Smartphone } from "lucide-react";
 import { useContextMenu } from "./lib/contextMenu";
 import ChatView from "./features/chat/ChatView";
+import UpdateBanner from "./features/update/UpdateBanner";
 import ActivityPanel from "./features/chat/ActivityPanel";
 import { finished } from "./features/chat/engine";
 import { useChats } from "./features/chat/useChats";
@@ -118,6 +119,7 @@ export default function App() {
         {page === "approvals" && <div className="mx-auto max-w-5xl"><h1 className="mb-1 text-lg font-semibold">Permissões</h1><p className="mb-6 text-sm text-muted">Quando uma IA quer fazer algo sensível, ela pede seu OK aqui.</p><ApprovalsPanel /></div>}
         {page === "remote" && <div className="mx-auto max-w-5xl"><h1 className="mb-1 text-lg font-semibold">Usar no celular</h1><p className="mb-6 text-sm text-muted">Conecte o app do celular lendo o QR Code.</p><RemotePanel /></div>}
       </div>}
+      <UpdateBanner />
     </main>
   );
 }

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, FolderOpen, Square, Wand2 } from "lucide-react";
 import { brand, effortName, ProviderMark } from "../../lib/providers";
 import { cancelTask, desktopBridgeAvailable, type ProviderId, type TaskSnapshot } from "../../lib/tauri";
-import { finished, prettyModel, type Chat } from "./engine";
+import { finished, parseChoices, prettyModel, splitAnswer, type Chat } from "./engine";
 import { useContextMenu } from "../../lib/contextMenu";
 import type { useChats } from "./useChats";
 import Markdown from "./Markdown";
@@ -54,8 +54,11 @@ export default function ChatView({ hub, tasks }: { hub: Hub; tasks: TaskSnapshot
           const last = turn.attempts[turn.attempts.length - 1];
           const taskId = last && last.taskId !== "pending" ? last.taskId : null;
           const task = tasks.find((t) => t.task_id === taskId);
-          const live = taskId ? (hub.streams.replies.get(taskId) ?? []).join("\n\n") : "";
-          const reply = live || turn.answer || "";
+          const split = taskId ? splitAnswer(hub.streams.replies.get(taskId) ?? [], hub.streams.finals.get(taskId)) : { steps: [], answer: "" };
+          const reply = split.answer || turn.answer || "";
+          const steps = split.answer ? split.steps : turn.steps ?? [];
+          const choices = reply ? parseChoices(reply) : null;
+          const isLast = turn.id === chat.turns[chat.turns.length - 1]?.id;
           const stale = !task && !reply && !turn.error && Date.now() - turn.at > 120_000;
           const running = !turn.error && !stale && !!taskId && (task ? !finished.includes(task.status) : !turn.answer);
           const provider = last?.provider ?? turn.route?.provider;
@@ -74,10 +77,23 @@ export default function ChatView({ hub, tasks }: { hub: Hub; tasks: TaskSnapshot
                   {running && <span className="flex items-center gap-1.5 text-muted"><span className="h-1.5 w-1.5 animate-pulse rounded-full" style={{ background: b?.color }} />trabalhando</span>}
                 </div>
                 {turn.notes.map((n, i) => <p key={i} className="mb-1.5 text-[12px] text-amber-300/90">{n}</p>)}
+                {steps.length > 0 && <details className="mb-2 text-[12px] text-muted"><summary className="cursor-pointer select-none hover:text-zinc-300">{steps.length} etapa(s) intermediária(s)</summary><div className="mt-1.5 space-y-1 border-l border-line pl-3">{steps.map((s, i) => <p key={i} className="whitespace-pre-wrap">{s}</p>)}</div></details>}
                 {turn.error ? <p className="text-[14px] text-rose-300">Não deu certo: {turn.error}</p>
-                  : reply ? <Markdown text={reply} />
+                  : reply ? <>
+                    <Markdown text={choices ? choices.text : reply} />
+                    {choices && <div className="mt-3 rounded-xl border border-line bg-panel p-3">
+                      {choices.question && <p className="mb-2 text-[13px] font-medium text-zinc-200">{choices.question}</p>}
+                      <div className="flex flex-col gap-1.5">{choices.options.map((o) => <button key={o} disabled={!isLast || !!hub.busy[chat.id]} onClick={() => void hub.send(chat.id, o, "auto")} className="rounded-lg border border-line bg-raised/60 px-3 py-2 text-left text-[13px] text-zinc-200 transition hover:border-zinc-500 hover:bg-raised disabled:opacity-50">{o}</button>)}</div>
+                    </div>}
+                  </>
                   : (task && finished.includes(task.status)) || stale ? <p className="text-[14px] text-muted">A IA terminou sem enviar resposta em texto.</p>
                   : <div className="flex gap-1 py-2">{[0, 1, 2].map((i) => <span key={i} className="h-1.5 w-1.5 animate-bounce rounded-full bg-zinc-500" style={{ animationDelay: `${i * 120}ms` }} />)}</div>}
+                {turn.denials && turn.denials.length > 0 && <div className="mt-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+                  <p className="text-[13px] font-medium text-amber-200">A IA precisou de permissão para:</p>
+                  <ul className="mt-1.5 space-y-0.5 text-[12px] text-zinc-300">{turn.denials.map((d, i) => <li key={i} className="truncate" title={d.target}>• {d.dir ? `abrir ${d.dir}` : `usar ${d.tool}${d.target ? `: ${d.target}` : ""}`}</li>)}</ul>
+                  {turn.retried ? <p className="mt-2 text-[12px] text-emerald-300">Permitido nesta conversa.</p>
+                    : <button onClick={() => hub.allowAndRetry(chat.id, turn.id)} className="mt-2.5 rounded-lg bg-zinc-100 px-3 py-1.5 text-[12px] font-semibold text-zinc-900 hover:bg-white">Permitir e repetir</button>}
+                </div>}
                 {task?.status === "awaiting_approval" && <p className="mt-2 text-[12px] text-violet-300">A IA está pedindo permissão — abra “Permissões”.</p>}
                 {running && taskId && <button onClick={() => void cancelTask(taskId)} className="mt-2 flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] text-muted transition hover:bg-raised hover:text-zinc-200"><Square size={9} fill="currentColor" />Parar</button>}
               </div>

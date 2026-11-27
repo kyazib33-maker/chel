@@ -1429,6 +1429,8 @@ pub fn run() {
             });
             Ok(())
         })
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             start_agent_task, cancel_task, list_tasks,
             skills::list_skills, skills::import_skills, skills::default_workspace, quota::read_quotas, quota::model_catalog, publish_chat_state,

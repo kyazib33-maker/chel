@@ -1023,6 +1023,9 @@ async fn execute_node(
         effort: node.effort.clone(),
         display_name: Some(node.name.clone()),
         resume_id: None,
+        add_dirs: Vec::new(),
+        allowed_tools: Vec::new(),
+        system_note: None,
     };
     let spec = build_process_spec(request).map_err(|e| RunnerError::Node {
         node: node.id.clone(),

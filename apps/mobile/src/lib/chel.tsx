@@ -3,7 +3,7 @@ import { AppState } from "react-native";
 import { forgetRemoteConnection, loadRemoteConnection, pairWithCode, pairWithHost, remoteFetch, type RemoteConnection } from "./remote";
 
 export type ProviderId = "claude_code" | "codex" | "antigravity";
-export type Turn = { id: string; prompt: string; at: number; notes: string[]; error: string | null; provider: ProviderId | null; model: string | null; effort: string | null; answer: string; status: string | null; task_id: string | null };
+export type Turn = { id: string; prompt: string; at: number; notes: string[]; error: string | null; provider: ProviderId | null; model: string | null; effort: string | null; answer: string; status: string | null; task_id: string | null; steps?: string[]; denials?: Array<{ tool: string; target: string; dir: string | null }>; retried?: boolean };
 export type Chat = { id: string; title: string; folder: string; pinned?: boolean; updatedAt: number; turns: Turn[] };
 export type Working = { chat_id: string; chat_title: string; provider: ProviderId | null; model: string | null; effort: string | null; since: number; task_id: string; status: string; subagents: Array<{ description: string; kind: string; done: boolean }> };
 export type QuotaWindow = { label: string; remaining_pct: number; resets: string | null };
@@ -74,4 +74,15 @@ export function useChel() {
   const ctx = useContext(ChelContext);
   if (!ctx) throw new Error("ChelProvider ausente");
   return ctx;
+}
+
+/** Reads the choice box the AI may end its answer with (a ```opcoes block). */
+export function parseChoices(answer: string): { text: string; question: string; options: string[] } | null {
+  const m = answer.match(/```opc(?:oes|ões)\s*\n([\s\S]*?)```\s*$/i);
+  if (!m) return null;
+  const lines = m[1].split("\n").map((l) => l.trim()).filter(Boolean);
+  const isOption = (l: string) => /^[-*•]|^\d+[.)]/.test(l);
+  const options = lines.filter(isOption).map((l) => l.replace(/^([-*•]|\d+[.)])\s*/, ""));
+  const question = lines.find((l) => !isOption(l)) ?? "";
+  return options.length ? { text: answer.slice(0, m.index).trim(), question, options } : null;
 }

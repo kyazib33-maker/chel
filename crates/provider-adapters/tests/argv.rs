@@ -11,6 +11,9 @@ fn request(provider: ProviderId) -> AgentLaunchRequest {
         effort: Some("HIGH".into()),
         display_name: Some("Backend agent".into()),
         resume_id: None,
+        add_dirs: Vec::new(),
+        allowed_tools: Vec::new(),
+        system_note: None,
     }
 }
 

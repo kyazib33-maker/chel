@@ -155,7 +155,7 @@ impl ChatBridge {
     pub fn subscribe_commands(&self) -> broadcast::Receiver<serde_json::Value> { self.commands.subscribe() }
     fn snapshot(&self) -> serde_json::Value { self.state.read().map(|g| g.clone()).unwrap_or_default() }
     fn command(&self, command: serde_json::Value) -> Result<(), ApiError> {
-        const ALLOWED: [&str; 7] = ["send", "new_chat", "delete_chat", "rename_chat", "pin_chat", "set_folder", "cancel"];
+        const ALLOWED: [&str; 8] = ["send", "new_chat", "delete_chat", "rename_chat", "pin_chat", "set_folder", "cancel", "allow_retry"];
         let kind = command.get("type").and_then(|t| t.as_str()).unwrap_or_default();
         if !ALLOWED.contains(&kind) { return Err(ApiError::bad_request("comando de chat desconhecido")); }
         self.commands.send(command).map(|_| ()).map_err(|_| ApiError::bad_request("o Chel do computador não está aberto"))

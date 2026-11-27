@@ -21,6 +21,14 @@ pub fn build_process_spec(request: AgentLaunchRequest) -> Result<ProcessSpec, Ad
         return Err(AdapterError::EmptyPrompt);
     }
 
+    let mut request = request;
+    if request.provider != ProviderId::ClaudeCode {
+        if let Some(note) = request.system_note.take() {
+            request.prompt = format!("[Contexto do Chel: {note}]
+
+{}", request.prompt);
+        }
+    }
     let mut args = Vec::new();
     let program = match request.provider {
         ProviderId::ClaudeCode => {
@@ -34,6 +42,16 @@ pub fn build_process_spec(request: AgentLaunchRequest) -> Result<ProcessSpec, Ad
             ]);
             if let Some(id) = request.resume_id.as_ref() {
                 args.extend(["--resume".into(), id.clone()]);
+            }
+            for dir in &request.add_dirs {
+                args.extend(["--add-dir".into(), dir.clone()]);
+            }
+            if !request.allowed_tools.is_empty() {
+                args.push("--allowedTools".into());
+                args.extend(request.allowed_tools.iter().cloned());
+            }
+            if let Some(note) = request.system_note.as_ref() {
+                args.extend(["--append-system-prompt".into(), note.clone()]);
             }
             if let Some(model) = request.model.as_ref() {
                 args.extend(["--model".into(), model.clone()]);

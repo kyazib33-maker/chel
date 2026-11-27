@@ -2,8 +2,10 @@ import type { ModelCatalog, ProviderId, ProviderQuota, RouteRecommendation, Task
 
 export type Quality = "economy" | "balanced" | "maximum";
 export type Attempt = { provider: ProviderId; taskId: string; sessionId?: string; model?: string | null; modelName?: string };
-export type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[]; at: number; answer?: string; cwd?: string };
-export type Chat = { id: string; title: string; turns: Turn[]; folder: string; quality: Quality; updatedAt: number; pinned?: boolean };
+export type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[]; at: number; answer?: string; steps?: string[]; cwd?: string; denials?: Denial[]; retried?: boolean };
+export type Chat = { id: string; title: string; turns: Turn[]; folder: string; quality: Quality; updatedAt: number; pinned?: boolean; grants?: { dirs: string[]; tools: string[] } };
+/** Something the AI tried to do and was blocked from, waiting for the user's OK. */
+export type Denial = { tool: string; target: string; dir: string | null };
 export type Subagent = { id: string; taskId: string; description: string; kind: string; done: boolean };
 
 export const names: Record<ProviderId, string> = { claude_code: "Claude", codex: "Codex", antigravity: "Antigravity" };
@@ -40,6 +42,8 @@ export function readStreams(events: TaskEvent[]) {
   const sessions = new Map<string, string>();
   const models = new Map<string, string>();
   const subagents = new Map<string, Subagent>();
+  const finals = new Map<string, string>();
+  const denials = new Map<string, Denial[]>();
   for (const event of events) {
     if (event.payload.type !== "output") continue;
     const line = event.payload.data.line;
@@ -52,6 +56,12 @@ export function readStreams(events: TaskEvent[]) {
       }
       if (d.type === "thread.started" && d.thread_id) { sessions.set(event.task_id, d.thread_id); continue; }
       if (d.event === "init" && d.conversation_id) { sessions.set(event.task_id, d.conversation_id); continue; }
+      // Final answer + anything the AI was not allowed to do.
+      if (d.type === "result") {
+        if (!d.is_error && typeof d.result === "string" && d.result.trim()) finals.set(event.task_id, d.result);
+        if (Array.isArray(d.permission_denials) && d.permission_denials.length) denials.set(event.task_id, d.permission_denials.map(toDenial));
+      }
+      if (d.event === "result" && d.result?.response) finals.set(event.task_id, d.result.response);
       // Claude subagents: an Agent/Task tool call starts one; its tool_result ends it.
       const content = Array.isArray(d.message?.content) ? d.message.content : [];
       for (const c of content) {
@@ -77,8 +87,43 @@ export function readStreams(events: TaskEvent[]) {
     else if (d.event === "result" && d.result?.response) piece = d.result.response;
     if (piece) replies.set(event.task_id, [...(replies.get(event.task_id) ?? []), piece]);
   }
-  return { replies, failures, sessions, models, subagents };
+  return { replies, failures, sessions, models, subagents, finals, denials };
 }
+
+function toDenial(x: { tool_name?: string; tool_input?: Record<string, unknown> }): Denial {
+  const input = x.tool_input ?? {};
+  const path = String(input.file_path ?? input.path ?? input.notebook_path ?? "");
+  const target = path || String(input.command ?? input.pattern ?? input.url ?? "");
+  const dir = path ? path.replace(/[\\/][^\\/]*$/, "") || path : null;
+  return { tool: x.tool_name ?? "ferramenta", target, dir };
+}
+
+/** Splits what the AI said into intermediate steps and the final answer. */
+export function splitAnswer(pieces: string[], final: string | undefined): { steps: string[]; answer: string } {
+  if (final) return { steps: pieces.filter((p) => p.trim() !== final.trim()), answer: final };
+  if (pieces.length === 0) return { steps: [], answer: "" };
+  return { steps: pieces.slice(0, -1), answer: pieces[pieces.length - 1] };
+}
+
+/** Reads the choice box the AI may end its answer with (a ```opcoes block). */
+export function parseChoices(answer: string): { text: string; question: string; options: string[] } | null {
+  const m = answer.match(/```opc(?:oes|ões)\s*\n([\s\S]*?)```\s*$/i);
+  if (!m) return null;
+  const lines = m[1].split("\n").map((l) => l.trim()).filter(Boolean);
+  const options = lines.filter((l) => /^[-*•]|^\d+[.)]/.test(l)).map((l) => l.replace(/^([-*•]|\d+[.)])\s*/, ""));
+  const question = lines.find((l) => !/^[-*•]|^\d+[.)]/.test(l)) ?? "";
+  return options.length ? { text: answer.slice(0, m.index).trim(), question, options } : null;
+}
+
+/** Tells every AI it is talking through Chel, how permissions work and how to offer choices. */
+export const CHEL_NOTE = [
+  "Você está respondendo pelo Chel, um app em que o usuário conversa com você pelo PC ou pelo celular.",
+  "Ele não vê o terminal nem as configurações do Claude Code, Codex ou Antigravity: nunca peça para ele mudar configurações ou permissões.",
+  "Se uma ação for bloqueada por falta de permissão, diga em uma frase o que você precisa acessar; o Chel mostra ao usuário um botão \"Permitir e repetir\".",
+  "Quando precisar que o usuário escolha algo, termine a resposta com um bloco exatamente neste formato, com 2 a 4 opções curtas:",
+  "```opcoes\nPergunta curta?\n- Opção 1\n- Opção 2\n```",
+  "Responda em português, de forma simples e direta.",
+].join("\n");
 
 function content(d: Record<string, any>): string | null {
   const text = (d.message?.content ?? []).filter((c: { type: string }) => c.type === "text").map((c: { text: string }) => c.text).join("");

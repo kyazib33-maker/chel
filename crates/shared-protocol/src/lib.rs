@@ -61,6 +61,15 @@ pub struct AgentLaunchRequest {
     /// Continue an earlier conversation of the same provider instead of starting fresh.
     #[serde(default)]
     pub resume_id: Option<String>,
+    /// Extra folders the AI may read/write (granted by the user in Chel).
+    #[serde(default)]
+    pub add_dirs: Vec<String>,
+    /// Tools the user allowed without asking again (e.g. "Bash").
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// Extra instructions about the Chel environment.
+    #[serde(default)]
+    pub system_note: Option<String>,
 }
 
 #[derive(Debug, Clone)]
