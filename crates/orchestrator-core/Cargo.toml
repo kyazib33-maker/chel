@@ -1,0 +1,11 @@
+[package]
+name = "orchestrator-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+process-manager = { path = "../process-manager" }
+provider-adapters = { path = "../provider-adapters" }
+shared-protocol = { path = "../shared-protocol" }
+thiserror.workspace = true

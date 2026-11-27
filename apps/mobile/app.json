@@ -1,0 +1,45 @@
+{
+  "expo": {
+    "name": "Psylium Remote",
+    "slug": "psylium-remote",
+    "scheme": "orchestratorremote",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "plugins": [
+      "expo-router",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Permita que o Psylium leia o QR Code de pareamento."
+        }
+      ],
+      "expo-secure-store",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "usesCleartextTraffic": true
+          }
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "android": {
+      "package": "com.local.psylium.remote"
+    },
+    "ios": {
+      "bundleIdentifier": "com.local.psylium.remote",
+      "infoPlist": {
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}

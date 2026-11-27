@@ -1,0 +1,42 @@
+[package]
+name = "psylium-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "psylium_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "psylium-desktop"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+process-manager = { path = "../../../crates/process-manager" }
+provider-adapters = { path = "../../../crates/provider-adapters" }
+shared-protocol = { path = "../../../crates/shared-protocol" }
+workflow-engine = { path = "../../../crates/workflow-engine" }
+workspace-manager = { path = "../../../crates/workspace-manager" }
+remote-server = { path = "../../../crates/remote-server" }
+usage-monitor = { path = "../../../crates/usage-monitor" }
+workflow-runner = { path = "../../../crates/workflow-runner" }
+permission-engine = { path = "../../../crates/permission-engine" }
+codex-app-server = { path = "../../../crates/codex-app-server" }
+claude-code-adapter = { path = "../../../crates/claude-code-adapter" }
+session-manager = { path = "../../../crates/session-manager" }
+antigravity-adapter = { path = "../../../crates/antigravity-adapter" }
+provider-runtime = { path = "../../../crates/provider-runtime" }
+agent-router = { path = "../../../crates/agent-router" }
+orchestrator-intelligence = { path = "../../../crates/orchestrator-intelligence" }
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true

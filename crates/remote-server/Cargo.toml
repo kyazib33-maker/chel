@@ -1,0 +1,37 @@
+[package]
+name = "remote-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = { version = "0.8.9", features = ["ws", "json", "macros"] }
+chrono.workspace = true
+futures-util = "0.3"
+hex = "0.4"
+provider-adapters = { path = "../provider-adapters" }
+provider-runtime = { path = "../provider-runtime" }
+process-manager = { path = "../process-manager" }
+permission-engine = { path = "../permission-engine" }
+codex-app-server = { path = "../codex-app-server" }
+claude-code-adapter = { path = "../claude-code-adapter" }
+antigravity-adapter = { path = "../antigravity-adapter" }
+rusqlite = { version = "0.43", features = ["bundled"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
+shared-protocol = { path = "../shared-protocol" }
+session-manager = { path = "../session-manager" }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+usage-monitor = { path = "../usage-monitor" }
+workflow-engine = { path = "../workflow-engine" }
+workflow-runner = { path = "../workflow-runner" }
+workspace-manager = { path = "../workspace-manager" }
+uuid.workspace = true
+
+[dev-dependencies]
+tokio-tungstenite = "0.30"
+

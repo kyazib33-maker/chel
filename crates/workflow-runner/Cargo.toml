@@ -1,0 +1,18 @@
+[package]
+name = "workflow-runner"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+process-manager = { path = "../process-manager" }
+provider-adapters = { path = "../provider-adapters" }
+serde.workspace = true
+serde_json.workspace = true
+shared-protocol = { path = "../shared-protocol" }
+thiserror.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+workflow-engine = { path = "../workflow-engine" }
+workspace-manager = { path = "../workspace-manager" }

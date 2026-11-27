@@ -1,0 +1,22 @@
+{
+  "name": "psylium",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "dev:desktop": "pnpm --filter @orchestrator/desktop tauri:dev",
+    "dev:mobile": "pnpm --filter @orchestrator/mobile start",
+    "build:desktop": "pnpm --filter @orchestrator/desktop build",
+    "typecheck": "pnpm -r typecheck",
+    "doctor:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/doctor.ps1",
+    "security:audit": "powershell -ExecutionPolicy Bypass -File ./scripts/security-audit.ps1",
+    "release:check": "powershell -ExecutionPolicy Bypass -File ./scripts/release-check.ps1",
+    "build:windows": "powershell -ExecutionPolicy Bypass -File ./scripts/build-windows.ps1",
+    "test:rust": "cargo test --workspace",
+    "fmt:rust": "cargo fmt --all -- --check",
+    "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
+  }
+}
