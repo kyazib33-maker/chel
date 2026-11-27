@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, Bot, BrainCircuit, ChevronRight, Command, GitBranch, History, Home, Play, RefreshCw, ShieldCheck, Smartphone, Sparkles, Workflow as WorkflowIcon } from "lucide-react";
+import { Activity, Bot, BrainCircuit, ChevronRight, Command, GitBranch, History, Home, MessageCircle, Play, RefreshCw, ShieldCheck, Smartphone, Sparkles, Workflow as WorkflowIcon } from "lucide-react";
 import TaskBoard from "./features/tasks/TaskBoard";
+import ChatHome from "./features/chat/ChatHome";
 import WorkflowBuilder from "./features/workflows/WorkflowBuilder";
 import WorktreePanel from "./features/worktrees/WorktreePanel";
 import RemotePanel from "./features/remote/RemotePanel";
@@ -21,10 +22,10 @@ const providerLabel: Record<ProviderId, string> = {
   claude_code: "Claude Code", codex: "Codex CLI", antigravity: "Antigravity",
 };
 type NavItem = { id: Page; label: string; hint: string; icon: ReactNode };
-type Page = "router" | "tasks" | "workflows" | "run-history" | "worktrees" | "approvals" | "codex" | "claude" | "sessions" | "providers" | "remote" | "intelligence";
+type Page = "chat" | "router" | "tasks" | "workflows" | "run-history" | "worktrees" | "approvals" | "codex" | "claude" | "sessions" | "providers" | "remote" | "intelligence";
 
 export default function App() {
-  const [page, setPage] = useState<Page>("tasks");
+  const [page, setPage] = useState<Page>("chat");
   const [tasks, setTasks] = useState<TaskSnapshot[]>([]);
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [provider, setProvider] = useState<ProviderId>("claude_code");
@@ -108,13 +109,14 @@ export default function App() {
   }
 
   const mainNav: NavItem[] = [
-    { id: "tasks", label: "Início", hint: "Peça algo a uma IA e acompanhe o andamento", icon: <Home size={16} /> },
+    { id: "chat", label: "Conversar", hint: "", icon: <MessageCircle size={16} /> },
     { id: "approvals", label: "Pedidos de permissão", hint: "A IA quer fazer algo e precisa do seu OK", icon: <ShieldCheck size={16} /> },
-    { id: "router", label: "Me ajude a escolher", hint: "Descreva a tarefa e indicamos a melhor IA", icon: <Sparkles size={16} /> },
-    { id: "workflows", label: "Automações", hint: "Várias IAs trabalhando em sequência", icon: <WorkflowIcon size={16} /> },
     { id: "remote", label: "Usar no celular", hint: "Conecte o app do celular por QR Code", icon: <Smartphone size={16} /> },
   ];
   const advancedNav: NavItem[] = [
+    { id: "tasks", label: "Tarefas (manual)", hint: "Escolha você mesmo a IA, o modelo e acompanhe cada tarefa", icon: <Home size={16} /> },
+    { id: "router", label: "Ver como a IA é escolhida", hint: "Veja por que o Psylium escolheria cada IA", icon: <Sparkles size={16} /> },
+    { id: "workflows", label: "Automações", hint: "Várias IAs trabalhando em sequência", icon: <WorkflowIcon size={16} /> },
     { id: "providers", label: "IAs instaladas", hint: "Quais IAs o Psylium encontrou no seu PC", icon: <Bot size={16} /> },
     { id: "sessions", label: "Conversas abertas", hint: "Saída ao vivo de cada IA rodando", icon: <Activity size={16} /> },
     { id: "run-history", label: "Histórico de automações", hint: "Resultados das automações já rodadas", icon: <History size={16} /> },
@@ -139,8 +141,9 @@ export default function App() {
         </div>
       </aside>
 
-      <div className="min-w-0 flex-1 p-6">
-        <div className="mb-5 flex items-start justify-between gap-4"><div><h1 className="text-lg font-semibold">{current.label}</h1><p className="text-sm text-muted">{current.hint}</p></div><button onClick={() => void refresh()} className="rounded-lg border border-line p-2 hover:bg-panel" title="Atualizar"><RefreshCw size={14} /></button></div>
+      <div className={`min-w-0 flex-1 ${page === "chat" ? "px-6 pt-6" : "p-6"}`}>
+        {page !== "chat" && <div className="mb-5 flex items-start justify-between gap-4"><div><h1 className="text-lg font-semibold">{current.label}</h1><p className="text-sm text-muted">{current.hint}</p></div><button onClick={() => void refresh()} className="rounded-lg border border-line p-2 hover:bg-panel" title="Atualizar"><RefreshCw size={14} /></button></div>}
+        {page === "chat" && <ChatHome tasks={tasks} events={events} />}
         {page === "router" && <AgentRouter />}
         {page === "intelligence" && <IntelligenceConsole />}
         {page === "tasks" && <div className="grid gap-5 xl:grid-cols-[360px_minmax(0,1fr)]">
