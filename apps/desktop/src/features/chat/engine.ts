@@ -3,7 +3,7 @@ import type { ModelCatalog, ProviderId, ProviderQuota, RouteRecommendation, Task
 export type Quality = "economy" | "balanced" | "maximum";
 export type Attempt = { provider: ProviderId; taskId: string; sessionId?: string; model?: string | null; modelName?: string };
 export type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[]; at: number; answer?: string; cwd?: string };
-export type Chat = { id: string; title: string; turns: Turn[]; folder: string; quality: Quality; updatedAt: number };
+export type Chat = { id: string; title: string; turns: Turn[]; folder: string; quality: Quality; updatedAt: number; pinned?: boolean };
 export type Subagent = { id: string; taskId: string; description: string; kind: string; done: boolean };
 
 export const names: Record<ProviderId, string> = { claude_code: "Claude", codex: "Codex", antigravity: "Antigravity" };
@@ -85,23 +85,34 @@ function content(d: Record<string, any>): string | null {
   return text || null;
 }
 
-/** Picks an explicit model so the chat always shows which one is in use. */
-export function chooseModel(provider: ProviderId, quality: Quality, effort: string, catalog: ModelCatalog | null, quotas: ProviderQuota[]): { id: string | null; name: string } {
+/** Top-of-line models Chel never uses: it always stays economical. */
+const TOP_TIER = /fable|mythos|opus|astra|argon|ultra|\bpro\b|-max\b/i;
+
+/** Effort follows how complex the request is, capped at "high". */
+export function effortFor(complexity: string | undefined): string {
+  return complexity === "high" ? "high" : complexity === "low" ? "low" : "medium";
+}
+
+/** Picks the cheapest model that fits the task's complexity — never a top-tier one. */
+export function chooseModel(provider: ProviderId, complexity: string | undefined, catalog: ModelCatalog | null, quotas: ProviderQuota[]): { id: string | null; name: string } {
+  const effort = effortFor(complexity);
   if (provider === "claude_code") {
-    const alias = quality === "maximum" ? "opus" : quality === "economy" && effort === "low" ? "haiku" : "sonnet";
+    const alias = complexity === "low" ? "haiku" : "sonnet";
     return { id: alias, name: prettyModel(alias) };
   }
   if (provider === "codex") {
-    const id = catalog?.codex_default ?? catalog?.codex[0]?.id ?? null;
-    return { id, name: catalog?.codex.find((m) => m.id === id)?.name ?? id ?? "Codex" };
+    const allowed = (catalog?.codex ?? []).filter((m) => !TOP_TIER.test(m.id) && !TOP_TIER.test(m.name));
+    const fallback = allowed.find((m) => m.id === catalog?.codex_default) ?? allowed[0];
+    // The catalog lists newer/larger models first: simple tasks take the last (smallest) one.
+    const chosen = complexity === "low" ? allowed[allowed.length - 1] ?? fallback : fallback;
+    return chosen ? { id: chosen.id, name: chosen.name } : { id: null, name: "Codex" };
   }
-  const list = catalog?.antigravity ?? [];
+  const list = (catalog?.antigravity ?? []).filter((m) => !TOP_TIER.test(m.id));
   const windows = quotas.find((q) => q.provider === "antigravity")?.windows ?? [];
   const room = (family: string) => { const w = windows.filter((x) => x.label.startsWith(family)); return w.length === 0 || w.every((x) => x.remaining_pct > 0); };
-  const level = effort === "max" ? "xhigh" : effort;
   const candidates = room("Gemini")
-    ? quality === "economy" ? [`gemini-3.8-flash-${level}`, `gemini-4-hydrogen-${level}`] : [`gemini-4-hydrogen-${level}`, `gemini-3.8-flash-${level}`]
-    : quality === "maximum" || ["high", "xhigh", "max"].includes(effort) ? ["claude-opus-4-6-thinking", "claude-sonnet-4-6"] : ["claude-sonnet-4-6", "claude-opus-4-6-thinking"];
+    ? complexity === "high" ? [`gemini-4-hydrogen-${effort}`, `gemini-3.8-flash-${effort}`] : [`gemini-3.8-flash-${effort}`, `gemini-4-hydrogen-${effort}`]
+    : ["claude-sonnet-4-6"];
   const found = candidates.map((c) => list.find((m) => m.id === c)).find(Boolean) ?? list[0];
   return found ? { id: found.id, name: found.name.replace(/\s*\((Thinking|Low|Medium|High|XHigh)\)$/i, "") } : { id: null, name: "Antigravity" };
 }

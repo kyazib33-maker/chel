@@ -1,3 +1,4 @@
+mod job;
 mod quota;
 mod skills;
 use antigravity_adapter::{
@@ -1155,6 +1156,12 @@ async fn start_remote_server(
         .map_err(|error| error.to_string())
 }
 
+/// The desktop chat publishes its conversations so paired phones can see them.
+#[tauri::command]
+fn publish_chat_state(controller: State<'_, RemoteServerController>, state: serde_json::Value) {
+    controller.chat().publish(state);
+}
+
 #[tauri::command]
 async fn stop_remote_server(controller: State<'_, RemoteServerController>) -> Result<(), String> {
     controller.stop().await.map_err(|error| error.to_string())
@@ -1249,6 +1256,8 @@ pub fn run() {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
+    // AI processes started by Chel must not outlive it.
+    job::kill_children_on_exit();
 
     tauri::Builder::default()
         .setup(|app| {
@@ -1310,6 +1319,18 @@ pub fn run() {
             app.manage(claude_approval_bridge);
             app.manage(codex_approval_bridge);
             app.manage(usage_monitor.clone());
+            // Commands from paired phones reach the chat in the desktop window.
+            let mut chat_commands = remote_controller.chat().subscribe_commands();
+            let chat_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    match chat_commands.recv().await {
+                        Ok(command) => { let _ = chat_handle.emit("remote-chat-command", command); }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
             app.manage(remote_controller);
 
             let claude_handle = app.handle().clone();
@@ -1410,7 +1431,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_agent_task, cancel_task, list_tasks,
-            skills::list_skills, skills::import_skills, skills::default_workspace, quota::read_quotas, quota::model_catalog,
+            skills::list_skills, skills::import_skills, skills::default_workspace, quota::read_quotas, quota::model_catalog, publish_chat_state,
             remember_project_memory, search_project_memory, list_project_memory, delete_project_memory,
             list_model_pricing, configure_model_pricing, estimate_model_cost, compile_and_save_delegation_workflow, verify_audit_journal,
             create_worktree, list_worktrees, remove_worktree,
@@ -1424,5 +1445,5 @@ pub fn run() {
             list_managed_sessions, list_provider_capabilities, recommend_agent_route, build_delegation_blueprint
         ])
         .run(tauri::generate_context!())
-        .expect("falha ao executar o Psylium Desktop");
+        .expect("falha ao executar o Chel Desktop");
 }

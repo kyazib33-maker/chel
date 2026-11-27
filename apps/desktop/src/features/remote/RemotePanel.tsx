@@ -1,217 +1,106 @@
 import { useCallback, useEffect, useState } from "react";
 import { QRCodeSVG } from "qrcode.react";
-import { AlertTriangle, Check, Copy, Laptop, RefreshCw, Shield, Smartphone, Wifi, WifiOff, X } from "lucide-react";
+import { Check, Copy, Power, RefreshCw, Smartphone, X } from "lucide-react";
 import {
-  createRemotePairing,
-  desktopBridgeAvailable,
-  getRemoteServerInfo,
-  getUsageSnapshot,
-  listPairedDevices,
-  revokePairedDevice,
-  startRemoteServer,
-  stopRemoteServer,
-  type PairingInfo,
-  type PairedDevice,
-  type ProviderUsage,
-  type RemoteServerInfo,
-  type UsageSnapshot,
+  createRemotePairing, desktopBridgeAvailable, getRemoteServerInfo, listPairedDevices, revokePairedDevice, startRemoteServer, stopRemoteServer,
+  type PairingInfo, type PairedDevice, type RemoteServerInfo,
 } from "../../lib/tauri";
 
-const providerLabels = {
-  claude_code: "Claude Code",
-  codex: "Codex CLI",
-  antigravity: "Antigravity",
-} as const;
+type Pairing = PairingInfo & { short_codes?: Array<{ label: string; endpoint: string; code: string }> };
 
 export default function RemotePanel() {
   const [server, setServer] = useState<RemoteServerInfo | null>(null);
-  const [pairing, setPairing] = useState<PairingInfo | null>(null);
+  const [pairing, setPairing] = useState<Pairing | null>(null);
   const [devices, setDevices] = useState<PairedDevice[]>([]);
-  const [usage, setUsage] = useState<UsageSnapshot | null>(null);
-  const [enableLan, setEnableLan] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [, tick] = useState(0);
 
   const refresh = useCallback(async () => {
     if (!desktopBridgeAvailable) return;
     try {
-      const [status, metrics] = await Promise.all([getRemoteServerInfo(), getUsageSnapshot()]);
+      const status = await getRemoteServerInfo();
       setServer(status);
-      setUsage(metrics);
-      if (status.running) setDevices(await listPairedDevices());
-      else setDevices([]);
-    } catch (reason) {
-      setError(String(reason));
-    }
+      setDevices(status.running ? await listPairedDevices() : []);
+    } catch (reason) { setError(String(reason)); }
   }, []);
 
   useEffect(() => {
     void refresh();
-    const timer = window.setInterval(() => void refresh(), 20_000);
-    return () => window.clearInterval(timer);
+    const timer = window.setInterval(() => { void refresh(); tick((n) => n + 1); }, 5000);
+    const clock = window.setInterval(() => tick((n) => n + 1), 1000);
+    return () => { window.clearInterval(timer); window.clearInterval(clock); };
   }, [refresh]);
 
-  async function start() {
-    setBusy(true); setError(null); setPairing(null);
-    try {
-      setServer(await startRemoteServer(enableLan));
-      await refresh();
-    } catch (reason) { setError(String(reason)); }
-    finally { setBusy(false); }
-  }
-
-  async function stop() {
+  async function run(action: () => Promise<void>) {
     setBusy(true); setError(null);
-    try {
-      await stopRemoteServer();
-      setPairing(null);
-      await refresh();
-    } catch (reason) { setError(String(reason)); }
-    finally { setBusy(false); }
+    try { await action(); } catch (reason) { setError(String(reason)); } finally { setBusy(false); }
+  }
+  const turnOn = () => run(async () => {
+    if (server?.running && !server.lan_enabled) await stopRemoteServer();
+    setServer(await startRemoteServer(true));
+    setPairing(await createRemotePairing() as Pairing);
+    await refresh();
+  });
+  const turnOff = () => run(async () => { await stopRemoteServer(); setPairing(null); await refresh(); });
+  const newCode = () => run(async () => { setPairing(await createRemotePairing() as Pairing); });
+  const revoke = (id: string) => { if (window.confirm("Desconectar este aparelho? Ele vai precisar de um código novo para voltar.")) void run(async () => { await revokePairedDevice(id); await refresh(); }); };
+  async function copy(code: string) {
+    try { await navigator.clipboard.writeText(code); setCopied(code); window.setTimeout(() => setCopied(null), 1500); } catch { setError("Não foi possível copiar."); }
   }
 
-  async function pair() {
-    setBusy(true); setError(null);
-    try { setPairing(await createRemotePairing()); }
-    catch (reason) { setError(String(reason)); }
-    finally { setBusy(false); }
-  }
+  const on = !!server?.running && server.lan_enabled;
+  const secondsLeft = pairing ? Math.max(0, Math.round((new Date(pairing.expires_at).getTime() - Date.now()) / 1000)) : 0;
+  const expired = !!pairing && secondsLeft === 0;
 
-  async function revoke(id: string) {
-    if (!window.confirm("Revogar o acesso deste dispositivo? Ele precisará parear novamente.")) return;
-    try { await revokePairedDevice(id); await refresh(); }
-    catch (reason) { setError(String(reason)); }
-  }
+  return <div className="space-y-5">
+    {!desktopBridgeAvailable && <p className="text-sm text-amber-300">Abra pelo app instalado para conectar o celular.</p>}
+    {error && <p className="break-words rounded-xl border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200">{error}</p>}
 
-  async function copyCode() {
-    if (!pairing) return;
-    try {
-      await navigator.clipboard.writeText(pairing.pairing_code);
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    } catch { setError("Não foi possível copiar o código de pareamento."); }
-  }
-
-  return (
-    <div className="space-y-5">
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(360px,.9fr)]">
-        <section className="rounded-2xl border border-line bg-panel p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2 text-accent"><Smartphone size={17} /><h2 className="text-sm font-semibold text-zinc-100">Remote Control</h2></div>
-              <p className="mt-1 text-xs text-muted">Conecte o aplicativo mobile ao Host deste computador.</p>
-            </div>
-            <span className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-[10px] ${server?.running ? "bg-emerald-400/10 text-emerald-300" : "bg-slate-700/60 text-slate-400"}`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${server?.running ? "bg-emerald-400" : "bg-slate-500"}`} />
-              {server?.running ? "Servidor ativo" : "Servidor desligado"}
-            </span>
-          </div>
-
-          {!server?.running ? (
-            <div className="mt-5 space-y-4">
-              <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-line bg-canvas p-4">
-                <input type="checkbox" checked={enableLan} onChange={(event) => setEnableLan(event.target.checked)} className="mt-0.5 accent-cyan-400" />
-                <span>
-                  <span className="flex items-center gap-2 text-xs font-medium text-zinc-100"><Wifi size={14} /> Habilitar acesso pela rede local</span>
-                  <span className="mt-1 block text-[10px] leading-5 text-muted">Necessário para conectar o celular. Endereços Tailscale detectados também serão anunciados.</span>
-                </span>
-              </label>
-              <button disabled={busy || !desktopBridgeAvailable} onClick={() => void start()} className="rounded-lg bg-accent px-4 py-2.5 text-xs font-semibold text-zinc-950 disabled:opacity-50">{busy ? "Iniciando..." : "Iniciar servidor remoto"}</button>
-              {!desktopBridgeAvailable && <p className="text-[10px] text-amber-300">Abra o aplicativo pelo Tauri para iniciar o Host remoto.</p>}
-            </div>
-          ) : (
-            <div className="mt-5 space-y-4">
-              <div className="rounded-xl border border-line bg-canvas p-4">
-                <p className="text-[10px] uppercase tracking-wider text-muted">Endereços anunciados</p>
-                {server.endpoints.length ? server.endpoints.map((endpoint) => <p key={endpoint} className="mt-2 break-all font-mono text-xs text-cyan-200">{endpoint}</p>) : <p className="mt-2 text-xs text-amber-300">Nenhum endereço de rede foi detectado.</p>}
-                <p className="mt-3 text-[10px] leading-5 text-muted">Porta {server.port} · {server.lan_enabled ? "LAN habilitada" : "Somente localhost"}</p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <button onClick={() => void pair()} disabled={busy || !server.lan_enabled || server.endpoints.length === 0} className="rounded-lg bg-accent px-4 py-2.5 text-xs font-semibold text-zinc-950 disabled:opacity-40">{pairing ? "Gerar novo QR" : "Gerar QR de pareamento"}</button>
-                <button onClick={() => void stop()} disabled={busy} className="rounded-lg border border-rose-400/30 px-4 py-2.5 text-xs text-rose-300 disabled:opacity-50">Desligar servidor</button>
-              </div>
-              {!server.lan_enabled && <p className="text-[10px] text-amber-300">O servidor está restrito a localhost. Desligue e inicie com acesso à rede para conectar o celular.</p>}
-            </div>
-          )}
-
-          {server?.running && <div className="mt-4 flex items-start gap-2 rounded-lg border border-amber-400/20 bg-amber-400/5 p-3 text-[10px] leading-5 text-amber-200"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{server.security_notice}</div>}
-          {error && <p className="mt-3 break-all text-xs text-rose-300">{error}</p>}
-        </section>
-
-        <section className="rounded-2xl border border-line bg-panel p-5">
-          <div className="flex items-center gap-2"><Shield size={16} className="text-accent" /><h2 className="text-sm font-semibold">Pareamento seguro</h2></div>
-          {pairing ? (
-            <div className="mt-4 flex flex-col items-center text-center">
-              <div className="rounded-xl bg-white p-3"><QRCodeSVG value={pairing.qr_payload} size={220} level="M" includeMargin /></div>
-              <p className="mt-3 text-xs font-medium">Escaneie com o aplicativo mobile</p>
-              <p className="mt-1 text-[10px] text-muted">Código válido até {new Date(pairing.expires_at).toLocaleTimeString()}.</p>
-              <div className="mt-3 flex items-center gap-2 rounded-lg border border-line bg-canvas px-3 py-2">
-                <code className="max-w-[250px] break-all text-[10px] text-cyan-200">{pairing.pairing_code}</code>
-                <button onClick={() => void copyCode()} title="Copiar código" className="text-muted hover:text-white">{copied ? <Check size={14} /> : <Copy size={14} />}</button>
-              </div>
-              <p className="mt-3 max-w-md text-[10px] leading-5 text-muted">O QR contém um código de uso único, não o token permanente do dispositivo. Após parear, o token é salvo no armazenamento seguro do celular.</p>
-            </div>
-          ) : (
-            <div className="mt-4 flex min-h-[250px] flex-col items-center justify-center rounded-xl border border-dashed border-line bg-canvas/60 px-6 text-center">
-              <Laptop size={27} className="text-slate-600" />
-              <p className="mt-3 text-xs font-medium text-slate-300">Nenhum código ativo</p>
-              <p className="mt-1 max-w-xs text-[10px] leading-5 text-muted">Inicie o servidor com LAN habilitada e gere um QR temporário para autorizar o celular.</p>
-            </div>
-          )}
-        </section>
+    <section className="rounded-2xl border border-line bg-panel p-6">
+      <div className="flex flex-wrap items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${on ? "bg-emerald-400/15 text-emerald-300" : "bg-raised text-muted"}`}><Smartphone size={19} /></div>
+          <div><p className="text-sm font-semibold">{on ? "Acesso pelo celular ligado" : "Acesso pelo celular desligado"}</p><p className="text-xs text-muted">{on ? "Celulares conectados conseguem usar suas conversas." : "Ligue para gerar um código de conexão."}</p></div>
+        </div>
+        {on ? <button disabled={busy} onClick={() => void turnOff()} className="flex items-center gap-2 rounded-lg border border-line px-3.5 py-2 text-xs text-zinc-300 transition hover:bg-raised disabled:opacity-50"><Power size={13} />Desligar</button>
+          : <button disabled={busy || !desktopBridgeAvailable} onClick={() => void turnOn()} className="flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 transition hover:bg-white disabled:opacity-50"><Power size={13} />{busy ? "Ligando…" : "Ligar e gerar código"}</button>}
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-        <section className="rounded-2xl border border-line bg-panel p-5">
-          <div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-semibold">Usage consolidado</h2><p className="mt-1 text-[10px] text-muted">Histórico local e observações ao vivo são exibidos separadamente.</p></div><button onClick={() => void refresh()} className="rounded-lg border border-line p-2 text-muted hover:text-white" title="Atualizar métricas"><RefreshCw size={14} /></button></div>
-          <div className="mt-4 grid gap-3 lg:grid-cols-3">
-            {usage?.providers.map((provider) => <UsageCard key={provider.provider} usage={provider} />)}
-            {!usage && <p className="text-xs text-muted">Carregando métricas...</p>}
+      {on && <div className="mt-6 border-t border-line pt-6">
+        {!pairing || expired ? <div className="text-center">
+          <p className="text-sm text-muted">{expired ? "O código expirou." : "Gere um código para conectar um celular."}</p>
+          <button disabled={busy} onClick={() => void newCode()} className="mt-3 inline-flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 hover:bg-white disabled:opacity-50"><RefreshCw size={13} />Gerar código</button>
+        </div> : <div className="grid items-center gap-8 md:grid-cols-[1fr_auto]">
+          <div>
+            <p className="text-xs text-muted">No app Chel do celular, toque em <b className="text-zinc-300">Conectar</b> e digite:</p>
+            <div className="mt-4 space-y-3">
+              {(pairing.short_codes ?? []).map((c) => <div key={c.code}>
+                <p className="mb-1.5 text-[11px] text-muted">{c.label}</p>
+                <button onClick={() => void copy(c.code)} className="group flex items-center gap-3 rounded-xl border border-line bg-canvas px-4 py-3 transition hover:border-zinc-600" title="Copiar">
+                  <span className="font-mono text-xl font-semibold tracking-wider text-white">{c.code}</span>
+                  {copied === c.code ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} className="text-muted group-hover:text-zinc-300" />}
+                </button>
+              </div>)}
+              {(pairing.short_codes ?? []).length === 0 && <p className="text-sm text-amber-300">Não encontrei um endereço de rede deste PC. Confira se está conectado ao Wi-Fi.</p>}
+            </div>
+            <p className="mt-4 text-[11px] text-muted">Vale por mais {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, "0")} · só serve uma vez · 5 erros invalidam o código.</p>
           </div>
-          {usage && <p className="mt-3 text-[10px] text-muted">Atualizado em {new Date(usage.generated_at).toLocaleString()} · As cotas oficiais das assinaturas não são disponibilizadas por um endpoint universal dos CLIs.</p>}
-        </section>
+          <div className="text-center"><div className="rounded-2xl bg-white p-2.5"><QRCodeSVG value={pairing.qr_payload} size={150} level="M" /></div><p className="mt-2 text-[11px] text-muted">ou leia o QR</p></div>
+        </div>}
+        <p className="mt-6 rounded-xl bg-raised/60 px-4 py-3 text-[11px] leading-relaxed text-muted">Funciona com o celular na <b className="text-zinc-300">mesma rede Wi-Fi</b>. Para usar fora de casa, instale o <b className="text-zinc-300">Tailscale</b> no PC e no celular: aparece um segundo código que funciona de qualquer lugar. Não abra portas no roteador.</p>
+      </div>}
+    </section>
 
-        <section className="rounded-2xl border border-line bg-panel p-5">
-          <div className="flex items-center justify-between"><div><h2 className="text-sm font-semibold">Dispositivos autorizados</h2><p className="mt-1 text-[10px] text-muted">Tokens podem ser revogados individualmente.</p></div><Smartphone size={16} className="text-accent" /></div>
-          <div className="mt-4 space-y-2">
-            {devices.map((device) => <div key={device.id} className="flex items-center justify-between gap-2 rounded-lg border border-line bg-canvas p-3"><div className="min-w-0"><p className="truncate text-xs font-medium">{device.name}</p><p className="mt-1 text-[9px] text-muted">Visto: {device.last_seen_at ? new Date(device.last_seen_at).toLocaleString() : "Nunca"}</p></div><button onClick={() => void revoke(device.id)} className="shrink-0 rounded-md p-2 text-rose-300 hover:bg-rose-400/10" title="Revogar dispositivo"><X size={13} /></button></div>)}
-            {!devices.length && <div className="rounded-lg border border-dashed border-line p-5 text-center"><WifiOff size={18} className="mx-auto text-slate-600" /><p className="mt-2 text-[10px] text-muted">Nenhum celular pareado.</p></div>}
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function UsageCard({ usage }: { usage: ProviderUsage }) {
-  const quotaTone = usage.quota_status === "quota_exceeded" ? "text-rose-300" : usage.quota_status === "rate_limited" ? "text-amber-300" : usage.quota_status === "normal" ? "text-emerald-300" : "text-slate-400";
-  return (
-    <article className="rounded-xl border border-line bg-canvas p-4">
-      <div className="flex items-start justify-between gap-3"><h3 className="text-xs font-semibold">{providerLabels[usage.provider]}</h3><span className={`text-[9px] uppercase tracking-wide ${quotaTone}`}>{usage.quota_status.replaceAll("_", " ")}</span></div>
-      <div className="mt-4 grid grid-cols-2 gap-3">
-        <Metric label="Tokens históricos" value={formatTokens(usage.historical.input_tokens + usage.historical.output_tokens + usage.historical.cache_read_tokens + usage.historical.cache_creation_tokens)} />
-        <Metric label="Tokens ao vivo" value={usage.live_available ? formatTokens(usage.live.input_tokens + usage.live.output_tokens + usage.live.cache_read_tokens + usage.live.cache_creation_tokens) : "—"} />
-        <Metric label="Registros lidos" value={usage.historical_available ? usage.sessions_scanned.toLocaleString() : "Não disponível"} />
-        <Metric label="Tempo de execução" value={formatDuration(usage.execution_seconds)} />
-      </div>
-      <div className="mt-4 space-y-1 border-t border-line pt-3 text-[9px] leading-4 text-muted">{usage.notes.map((note) => <p key={note}>{note}</p>)}</div>
-    </article>
-  );
-}
-
-function Metric({ label, value }: { label: string; value: string }) {
-  return <div><p className="text-[9px] text-muted">{label}</p><p className="mt-1 text-sm font-semibold text-zinc-100">{value}</p></div>;
-}
-
-function formatTokens(value: number): string {
-  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
-  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
-  return value.toLocaleString();
-}
-
-function formatDuration(seconds: number): string {
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  return hours ? `${hours}h ${minutes}m` : `${minutes}m`;
+    {on && <section className="rounded-2xl border border-line bg-panel p-6">
+      <h2 className="mb-3 text-sm font-semibold">Aparelhos conectados</h2>
+      {devices.length === 0 ? <p className="text-xs text-muted">Nenhum ainda.</p> : <div className="divide-y divide-line">
+        {devices.map((d) => <div key={d.id} className="flex items-center justify-between py-2.5">
+          <div><p className="text-sm">{d.name}</p><p className="text-[11px] text-muted">{d.last_seen_at ? `Visto ${new Date(d.last_seen_at).toLocaleString("pt-BR")}` : `Conectado ${new Date(d.created_at).toLocaleString("pt-BR")}`}</p></div>
+          <button onClick={() => revoke(d.id)} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-raised hover:text-rose-300"><X size={12} />Desconectar</button>
+        </div>)}
+      </div>}
+    </section>}
+  </div>;
 }

@@ -1,5 +1,5 @@
 //! Skill library: collects the skills of every AI installed on this computer
-//! into one Psylium library (~/.psylium/skills) and shares that library back
+//! into one Chel library (~/.chel/skills) and shares that library back
 //! with each AI, so whichever AI the chat picks can use any skill.
 //!
 //! A skill is a folder containing a `SKILL.md`. Existing skills in an AI's
@@ -29,7 +29,7 @@ fn home() -> PathBuf {
     std::env::var_os("USERPROFILE").or_else(|| std::env::var_os("HOME")).map(PathBuf::from).unwrap_or_default()
 }
 
-fn library() -> PathBuf { home().join(".psylium").join("skills") }
+fn library() -> PathBuf { home().join(".chel").join("skills") }
 
 /// Folders where each AI keeps skills, with a friendly label.
 fn sources() -> Vec<(&'static str, PathBuf)> {
@@ -43,7 +43,7 @@ fn sources() -> Vec<(&'static str, PathBuf)> {
     ]
 }
 
-/// Folders Psylium shares its library into: each AI's own global skills
+/// Folders Chel shares its library into: each AI's own global skills
 /// folder, plus `~/.agents/skills`, the shared location other agent CLIs read.
 fn targets() -> Vec<PathBuf> {
     let h = home();
@@ -96,7 +96,7 @@ pub fn scan() -> Vec<SkillInfo> {
         }
     };
     for (label, root) in sources() { for dir in skill_dirs(&root) { add(label, &dir); } }
-    for dir in skill_dirs(&lib) { add("Psylium", &dir); }
+    for dir in skill_dirs(&lib) { add("Chel", &dir); }
     found.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
     found
 }
@@ -135,12 +135,12 @@ pub fn list_skills() -> Vec<SkillInfo> { scan() }
 #[tauri::command]
 pub fn import_skills() -> Result<ImportReport, String> { import_all() }
 
-/// Folder used when the user doesn't pick one: Documents\Psylium (created on demand).
+/// Folder used when the user doesn't pick one: Documents\Chel (created on demand).
 #[tauri::command]
 pub fn default_workspace() -> Result<String, String> {
     let docs = home().join("Documents");
     let base = if docs.is_dir() { docs } else { home() };
-    let dir = base.join("Psylium");
+    let dir = base.join("Chel");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     Ok(dir.display().to_string())
 }

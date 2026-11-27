@@ -84,6 +84,15 @@ pub struct PairingInfo {
     pub expires_at: DateTime<Utc>,
     /// Compact JSON to be rendered as a QR by the Desktop UI.
     pub qr_payload: String,
+    /// Short codes to type on the phone, one per reachable address.
+    pub short_codes: Vec<ShortCode>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ShortCode {
+    pub label: String,
+    pub endpoint: String,
+    pub code: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -121,6 +130,38 @@ impl Default for RemoteServerConfig {
     }
 }
 
+/// Mirror of the desktop chat for paired phones. The desktop window publishes
+/// its conversations here and receives commands (send, new chat…) back.
+#[derive(Clone)]
+pub struct ChatBridge {
+    state: Arc<std::sync::RwLock<serde_json::Value>>,
+    commands: broadcast::Sender<serde_json::Value>,
+}
+
+impl Default for ChatBridge {
+    fn default() -> Self { Self::new() }
+}
+
+impl ChatBridge {
+    pub fn new() -> Self {
+        let (commands, _) = broadcast::channel(64);
+        Self { state: Arc::new(std::sync::RwLock::new(serde_json::json!({ "chats": [], "working": [], "quotas": [] }))), commands }
+    }
+    /// Replaces the snapshot phones see.
+    pub fn publish(&self, state: serde_json::Value) {
+        if let Ok(mut guard) = self.state.write() { *guard = state; }
+    }
+    /// Commands sent by phones, to be executed by the desktop window.
+    pub fn subscribe_commands(&self) -> broadcast::Receiver<serde_json::Value> { self.commands.subscribe() }
+    fn snapshot(&self) -> serde_json::Value { self.state.read().map(|g| g.clone()).unwrap_or_default() }
+    fn command(&self, command: serde_json::Value) -> Result<(), ApiError> {
+        const ALLOWED: [&str; 7] = ["send", "new_chat", "delete_chat", "rename_chat", "pin_chat", "set_folder", "cancel"];
+        let kind = command.get("type").and_then(|t| t.as_str()).unwrap_or_default();
+        if !ALLOWED.contains(&kind) { return Err(ApiError::bad_request("comando de chat desconhecido")); }
+        self.commands.send(command).map(|_| ()).map_err(|_| ApiError::bad_request("o Chel do computador não está aberto"))
+    }
+}
+
 #[derive(Clone)]
 pub struct RemoteServerController {
     processes: ProcessManager,
@@ -135,6 +176,7 @@ pub struct RemoteServerController {
     sessions: SessionRegistry,
     db_path: PathBuf,
     allowed_root: PathBuf,
+    chat: ChatBridge,
     active: Arc<AsyncMutex<Option<RemoteServer>>>,
 }
 
@@ -167,9 +209,12 @@ impl RemoteServerController {
             sessions,
             db_path,
             allowed_root,
+            chat: ChatBridge::new(),
             active: Arc::new(AsyncMutex::new(None)),
         }
     }
+
+    pub fn chat(&self) -> ChatBridge { self.chat.clone() }
 
     pub async fn start(&self, enable_lan: bool) -> Result<RemoteServerInfo, RemoteServerError> {
         let mut active = self.active.lock().await;
@@ -194,6 +239,7 @@ impl RemoteServerController {
             self.codex_manager.clone(),
             self.sessions.clone(),
             self.db_path.clone(),
+            self.chat.clone(),
         )
         .await?;
         let info = server.info();
@@ -266,6 +312,7 @@ impl RemoteServer {
         codex_manager: CodexAppServerManager,
         sessions: SessionRegistry,
         db_path: PathBuf,
+        chat: ChatBridge,
     ) -> Result<Self, RemoteServerError> {
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
@@ -321,9 +368,12 @@ impl RemoteServer {
             pairing: AsyncMutex::new(None),
             allowed_root: canonical_or_original(config.allowed_root),
             hub: EventHub::new(),
+            chat,
         });
         let router = Router::new()
             .route("/health", get(health))
+            .route("/api/v1/chat/state", get(get_chat_state))
+            .route("/api/v1/chat/command", post(post_chat_command))
             .route("/api/v1/pair", post(pair_device))
             .route("/api/v1/tasks", get(list_tasks).post(start_task))
             .route("/api/v1/tasks/{id}", get(get_task).delete(cancel_task))
@@ -400,12 +450,24 @@ impl RemoteServer {
 
     async fn create_pairing(&self) -> Result<PairingInfo, RemoteServerError> {
         let code = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
+        let secret: [u8; 4] = Uuid::new_v4().as_bytes()[..4].try_into().unwrap_or([0; 4]);
+        let short_secret = hex::encode(secret);
         let expires_at = Utc::now() + ChronoDuration::seconds(PAIRING_TTL_SECONDS);
         let mut pairing = self.state.pairing.lock().await;
         *pairing = Some(PairingChallenge {
             code: code.clone(),
+            short_secret,
             expires_at,
+            failures: 0,
         });
+        let short_codes: Vec<ShortCode> = self.info.endpoints.iter().filter_map(|endpoint| {
+            let rest = endpoint.strip_prefix("http://")?;
+            let (host, port) = rest.rsplit_once(':')?;
+            let ip: Ipv4Addr = host.parse().ok()?;
+            if ip.is_loopback() { return None; }
+            let label = if ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]) { "Tailscale (de qualquer lugar)" } else { "Mesma rede Wi-Fi" };
+            Some(ShortCode { label: label.into(), endpoint: endpoint.clone(), code: short_pairing_code(ip, port.parse().ok()?, secret) })
+        }).collect();
         let payload = serde_json::json!({
             "version": 1,
             "endpoints": self.info.endpoints,
@@ -420,6 +482,7 @@ impl RemoteServer {
             pairing_code: code,
             expires_at,
             qr_payload,
+            short_codes,
         })
     }
 
@@ -432,7 +495,30 @@ impl RemoteServer {
 
 struct PairingChallenge {
     code: String,
+    /// Hex secret carried inside the short typed code (CHEL-XXXX-…).
+    short_secret: String,
     expires_at: DateTime<Utc>,
+    failures: u8,
+}
+
+/// Wrong codes allowed before the pairing is cancelled (the short code has 32 bits of secret).
+const MAX_PAIRING_FAILURES: u8 = 5;
+const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/// Packs an IPv4 address, a port and a 4-byte secret into "CHEL-XXXX-XXXX-XXXX-XXXX".
+pub fn short_pairing_code(ip: Ipv4Addr, port: u16, secret: [u8; 4]) -> String {
+    let mut bytes = Vec::with_capacity(10);
+    bytes.extend_from_slice(&ip.octets());
+    bytes.extend_from_slice(&port.to_be_bytes());
+    bytes.extend_from_slice(&secret);
+    let mut bits: u64 = 0; let mut nbits = 0; let mut out = String::new();
+    for b in bytes {
+        bits = (bits << 8) | b as u64; nbits += 8;
+        while nbits >= 5 { nbits -= 5; out.push(CROCKFORD[((bits >> nbits) & 31) as usize] as char); }
+    }
+    if nbits > 0 { out.push(CROCKFORD[((bits << (5 - nbits)) & 31) as usize] as char); }
+    let groups: Vec<String> = out.as_bytes().chunks(4).map(|c| String::from_utf8_lossy(c).into_owned()).collect();
+    format!("CHEL-{}", groups.join("-"))
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -473,6 +559,7 @@ struct AppState {
     pairing: AsyncMutex<Option<PairingChallenge>>,
     allowed_root: PathBuf,
     hub: EventHub,
+    chat: ChatBridge,
 }
 
 #[derive(Clone)]
@@ -791,7 +878,14 @@ async fn pair_device(
         *pairing = None;
         return Err(ApiError::unauthorized("código de pareamento expirado"));
     }
-    if challenge.code != request.pairing_code {
+    let given = request.pairing_code.trim().to_ascii_lowercase();
+    if challenge.code != request.pairing_code && challenge.short_secret != given {
+        let failures = challenge.failures + 1;
+        if failures >= MAX_PAIRING_FAILURES {
+            *pairing = None;
+            return Err(ApiError::unauthorized("muitas tentativas erradas; gere um código novo no computador"));
+        }
+        if let Some(c) = pairing.as_mut() { c.failures = failures; }
         return Err(ApiError::unauthorized("código de pareamento inválido"));
     }
     let token = format!("{}.{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
@@ -823,6 +917,24 @@ async fn authenticate_headers(
     headers: &HeaderMap,
 ) -> Result<DeviceIdentity, ApiError> {
     state.devices.authenticate(bearer_token(headers)?).await
+}
+
+async fn get_chat_state(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    authenticate_headers(&state, &headers).await?;
+    Ok(Json(state.chat.snapshot()))
+}
+
+async fn post_chat_command(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(command): Json<serde_json::Value>,
+) -> Result<StatusCode, ApiError> {
+    authenticate_headers(&state, &headers).await?;
+    state.chat.command(command)?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 async fn list_tasks(
@@ -1753,7 +1865,7 @@ mod tests {
     #[tokio::test]
     async fn paired_device_token_can_be_revoked() {
         let path =
-            std::env::temp_dir().join(format!("psylium-device-{}.sqlite3", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("chel-device-{}.sqlite3", Uuid::new_v4()));
         let store = DeviceStore::open(path.clone()).unwrap();
         let token = "secret-test-token";
         let id = store.add("test phone".into(), token).await.unwrap();
@@ -1786,7 +1898,7 @@ mod tests {
         use tokio_tungstenite::{connect_async, tungstenite::Message as ClientMessage};
 
         let temp =
-            std::env::temp_dir().join(format!("psylium-remote-{}.sqlite3", Uuid::new_v4()));
+            std::env::temp_dir().join(format!("chel-remote-{}.sqlite3", Uuid::new_v4()));
         let processes = ProcessManager::new(Default::default());
         let server = RemoteServer::start(
             RemoteServerConfig {
@@ -1816,6 +1928,7 @@ mod tests {
                 .await
                 .unwrap(),
             temp.clone(),
+            ChatBridge::new(),
         )
         .await
         .unwrap();
@@ -1849,6 +1962,97 @@ mod tests {
         let snapshot: serde_json::Value = serde_json::from_str(snapshot.as_str()).unwrap();
         assert_eq!(snapshot["type"], "snapshot");
         socket.close(None).await.unwrap();
+        server.stop().await;
+        let _ = std::fs::remove_file(temp);
+    }
+}
+
+#[cfg(test)]
+mod short_code_tests {
+    use super::*;
+    #[test]
+    fn packs_address_port_and_secret() {
+        let code = short_pairing_code(Ipv4Addr::new(192, 168, 1, 23), 17_891, [0xde, 0xad, 0xbe, 0xef]);
+        assert!(code.starts_with("CHEL-"));
+        assert_eq!(code.len(), "CHEL-".len() + 16 + 3);
+        println!("CODE={code}");
+    }
+}
+
+#[cfg(test)]
+mod chat_bridge_tests {
+    use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn http(port: u16, method: &str, path: &str, token: Option<&str>, body: Option<serde_json::Value>) -> (u16, serde_json::Value) {
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+        let body = body.map(|b| b.to_string()).unwrap_or_default();
+        let auth = token.map(|t| format!("Authorization: Bearer {t}\r\n")).unwrap_or_default();
+        let req = format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\n{auth}Content-Length: {}\r\n\r\n{body}", body.len());
+        stream.write_all(req.as_bytes()).await.unwrap();
+        let mut raw = Vec::new();
+        stream.read_to_end(&mut raw).await.unwrap();
+        let text = String::from_utf8_lossy(&raw).to_string();
+        let status: u16 = text.split_whitespace().nth(1).unwrap().parse().unwrap();
+        let payload = text.split_once("\r\n\r\n").map(|x| x.1).unwrap_or("");
+        (status, serde_json::from_str(payload.trim()).unwrap_or(serde_json::Value::Null))
+    }
+
+    async fn start(chat: ChatBridge) -> (RemoteServer, PathBuf) {
+        let temp = std::env::temp_dir().join(format!("chel-chat-{}.sqlite3", Uuid::new_v4()));
+        let processes = ProcessManager::new(Default::default());
+        let server = RemoteServer::start(
+            RemoteServerConfig { enable_lan: false, port: 0, allowed_root: std::env::temp_dir() },
+            processes.clone(), UsageMonitor::default(), WorkflowStore::new(temp.with_extension("workflows")),
+            WorkflowRunner::new(processes.clone(), workspace_manager::WorkspaceManager::new(temp.with_extension("worktrees"))),
+            WorkflowRunStore::new(temp.with_extension("workflow-runs.json")),
+            CodexApprovalBridge::new(CodexAppServerManager::default(), permission_engine::PermissionEngine::default()),
+            ClaudeApprovalBridge::new(claude_code_adapter::ClaudeCodeManager::default(), permission_engine::PermissionEngine::default()),
+            ClaudeCodeManager::default(), CodexAppServerManager::default(),
+            SessionRegistry::open(temp.with_extension("sessions.json")).await.unwrap(),
+            temp.clone(), chat,
+        ).await.unwrap();
+        (server, temp)
+    }
+
+    #[tokio::test]
+    async fn phone_pairs_with_short_secret_reads_chats_and_sends_commands() {
+        let chat = ChatBridge::new();
+        let (server, temp) = start(chat.clone()).await;
+        let port = server.info.port;
+        server.create_pairing().await.unwrap();
+        let secret = server.state.pairing.lock().await.as_ref().unwrap().short_secret.clone();
+
+        let (status, paired) = http(port, "POST", "/api/v1/pair", None, Some(serde_json::json!({"pairing_code": secret.to_uppercase(), "device_name": "Pixel"}))).await;
+        assert_eq!(status, 200, "{paired}");
+        let token = paired["device_token"].as_str().unwrap().to_string();
+
+        chat.publish(serde_json::json!({"chats": [{"id": "c1", "title": "Teste"}]}));
+        assert_eq!(http(port, "GET", "/api/v1/chat/state", None, None).await.0, 401);
+        let (status, state) = http(port, "GET", "/api/v1/chat/state", Some(&token), None).await;
+        assert_eq!(status, 200);
+        assert_eq!(state["chats"][0]["title"], "Teste");
+
+        let mut commands = chat.subscribe_commands();
+        let (status, _) = http(port, "POST", "/api/v1/chat/command", Some(&token), Some(serde_json::json!({"type": "send", "chat_id": "c1", "prompt": "oi"}))).await;
+        assert_eq!(status, 202);
+        assert_eq!(commands.recv().await.unwrap()["prompt"], "oi");
+        let (status, _) = http(port, "POST", "/api/v1/chat/command", Some(&token), Some(serde_json::json!({"type": "rm -rf"}))).await;
+        assert_eq!(status, 400);
+        server.stop().await;
+        let _ = std::fs::remove_file(temp);
+    }
+
+    #[tokio::test]
+    async fn five_wrong_codes_cancel_the_pairing() {
+        let (server, temp) = start(ChatBridge::new()).await;
+        let port = server.info.port;
+        server.create_pairing().await.unwrap();
+        for _ in 0..MAX_PAIRING_FAILURES {
+            let (status, _) = http(port, "POST", "/api/v1/pair", None, Some(serde_json::json!({"pairing_code": "00000000", "device_name": "x"}))).await;
+            assert_eq!(status, 401);
+        }
+        assert!(server.state.pairing.lock().await.is_none());
         server.stop().await;
         let _ = std::fs::remove_file(temp);
     }

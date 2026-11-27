@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { defaultWorkspace, desktopBridgeAvailable, launchAgent, modelCatalog, readQuotas, recommendAgentRoute, type ModelCatalog, type ProviderId, type ProviderQuota, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
-import { chooseModel, names, newChat, prettyModel, readStreams, requestedProvider, titleFrom, validEffort, type Chat, type Quality, type Turn } from "./engine";
+import { cancelTask, defaultWorkspace, desktopBridgeAvailable, launchAgent, onRemoteChatCommand, publishChatState, modelCatalog, readQuotas, recommendAgentRoute, type ModelCatalog, type ProviderId, type ProviderQuota, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
+import { chooseModel, effortFor, finished, names, newChat, prettyModel, readStreams, requestedProvider, titleFrom, type Chat, type Turn } from "./engine";
 
 function load<T>(key: string, fallback: T): T { try { const v = localStorage.getItem(key); return v ? JSON.parse(v) as T : fallback; } catch { return fallback; } }
 function save(key: string, value: unknown) { try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* ignore */ } }
@@ -84,8 +84,8 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
       const next = turn.route.fallback_order.find((p) => !tried.includes(p) && hasQuota(p));
       const why = streams.failures.get(last.taskId) ?? task.last_error ?? "erro desconhecido";
       if (!next) { patchTurn(chat.id, turn.id, { error: `Nenhuma IA conseguiu responder. Último motivo: ${why}` }); continue; }
-      const effort = validEffort[next].includes(turn.route.effort) ? turn.route.effort : "medium";
-      const chosen = chooseModel(next, chat.quality, effort, catalog.current, quotasRef.current);
+      const effort = effortFor(turn.route.complexity);
+      const chosen = chooseModel(next, turn.route.complexity, catalog.current, quotasRef.current);
       patchTurn(chat.id, turn.id, (t) => ({ ...t, attempts: [...t.attempts, { provider: next, taskId: "pending", model: chosen.id, modelName: chosen.name }], notes: [...t.notes, `${names[last.provider]} não conseguiu (${why}). Tentando com ${names[next]}…`] }));
       void launchAgent({ provider: next, prompt: turn.prompt, cwd: turn.cwd || chat.folder || fallbackDir, model: chosen.id, effort, display_name: `${names[next]} · ${chat.title}` })
         .then((taskId) => patchTurn(chat.id, turn.id, (t) => ({ ...t, attempts: t.attempts.map((a) => a.taskId === "pending" ? { ...a, taskId } : a) })))
@@ -104,7 +104,7 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
     try {
       if (!quotasRef.current.length) await refreshQuotas();
       if (!catalog.current) catalog.current = await modelCatalog().catch(() => null);
-      const route = await recommendAgentRoute({ prompt, quality: chat.quality, preferred_provider: null, allow_antigravity: true });
+      const route = await recommendAgentRoute({ prompt, quality: "economy", preferred_provider: null, allow_antigravity: true });
       const sameFolder = chat.turns.filter((t) => (t.cwd ?? workDir) === workDir);
       const lastOf = (p?: ProviderId) => [...sameFolder].reverse().map((t) => t.attempts[t.attempts.length - 1]).find((a) => a?.sessionId && (!p || a.provider === p));
       const wanted = forced !== "auto" ? forced : requestedProvider(prompt);
@@ -127,8 +127,8 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
       }
       // Continue this AI's own earlier conversation in this chat, if there is one.
       const resumeId = lastOf(provider)?.sessionId ?? null;
-      const effort = validEffort[provider].includes(route.effort) ? route.effort : "medium";
-      const chosen = chooseModel(provider, chat.quality, effort, catalog.current, quotasRef.current);
+      const effort = effortFor(route.complexity);
+      const chosen = chooseModel(provider, route.complexity, catalog.current, quotasRef.current);
       update({ route: { ...route, provider, model: chosen.id, effort }, notes });
       const taskId = await launchAgent({ provider, prompt, cwd: workDir, model: chosen.id, effort, display_name: `${names[provider]} · ${chat.title === "Nova conversa" ? titleFrom(prompt) : chat.title}`, resume_id: resumeId });
       update({ attempts: [{ provider, taskId, model: chosen.id, modelName: chosen.name }] });
@@ -136,17 +136,79 @@ export function useChats(tasks: TaskSnapshot[], events: TaskEvent[]) {
     finally { setBusy((b) => ({ ...b, [chatId]: false })); }
   }
 
-  function createChat() {
+  function createChat(id?: string, focus = true) {
     const c = newChat(active?.folder ?? "", active?.quality ?? "balanced");
+    if (id) c.id = id;
     setChats((all) => [c, ...all]);
-    setActiveId(c.id);
+    if (focus) setActiveId(c.id);
+    return c.id;
   }
   function removeChat(id: string) {
     setChats((all) => { const rest = all.filter((c) => c.id !== id); return rest.length ? rest : [newChat()]; });
     if (id === activeId) setActiveId(chats.find((c) => c.id !== id)?.id ?? "");
   }
   const setFolder = (id: string, folder: string) => patchChat(id, (c) => ({ ...c, folder }));
-  const setQuality = (id: string, quality: Quality) => patchChat(id, (c) => ({ ...c, quality }));
+  const renameChat = (id: string, title: string) => { const t = title.trim(); if (t) patchChat(id, (c) => ({ ...c, title: t })); };
+  const togglePin = (id: string) => patchChat(id, (c) => ({ ...c, pinned: !c.pinned }));
 
-  return { chats, active, activeId: active?.id, setActiveId, createChat, removeChat, setFolder, setQuality, send, busy, quotas, quotasAt, refreshQuotas, streams, fallbackDir };
+  // ---- Phone access: publish the conversations and run commands sent by paired phones.
+  const snapshot = useMemo(() => {
+    const view = chats.map((c) => ({
+      id: c.id, title: c.title, folder: c.folder, pinned: !!c.pinned, updatedAt: c.updatedAt,
+      turns: c.turns.slice(-60).map((t) => {
+        const last = t.attempts[t.attempts.length - 1];
+        const task = last && tasks.find((x) => x.task_id === last.taskId);
+        return {
+          id: t.id, prompt: t.prompt, at: t.at, notes: t.notes, error: t.error,
+          provider: last?.provider ?? t.route?.provider ?? null, model: last?.modelName ?? null, effort: t.route?.effort ?? null,
+          answer: (last && (streams.replies.get(last.taskId) ?? []).join("\n\n")) || t.answer || "",
+          status: task?.status ?? (t.answer ? "succeeded" : null), task_id: last?.taskId ?? null,
+        };
+      }),
+    }));
+    const working = view.flatMap((c) => c.turns.filter((t) => t.task_id && t.status && !finished.includes(t.status)).map((t) => ({
+      chat_id: c.id, chat_title: c.title, provider: t.provider, model: t.model, effort: t.effort, since: t.at, task_id: t.task_id, status: t.status,
+      subagents: [...streams.subagents.values()].filter((s) => s.taskId === t.task_id).map((s) => ({ description: s.description, kind: s.kind, done: s.done })),
+    })));
+    return { chats: view, working, quotas, default_folder: fallbackDir, updated_at: Date.now() };
+  }, [chats, tasks, streams, quotas, fallbackDir]);
+
+  useEffect(() => {
+    if (!desktopBridgeAvailable) return;
+    const t = window.setTimeout(() => void publishChatState(snapshot).catch(() => undefined), 300);
+    return () => window.clearTimeout(t);
+  }, [snapshot]);
+
+  const remoteHandler = useRef<(cmd: Record<string, unknown>) => void>(() => undefined);
+  remoteHandler.current = (cmd) => {
+    const chatId = typeof cmd.chat_id === "string" ? cmd.chat_id : "";
+    switch (cmd.type) {
+      case "new_chat": createChat(chatId || undefined, false); break;
+      case "send": {
+        // A phone can start a conversation by sending to a new id: create it, then send once it exists.
+        if (chatId && !chats.some((c) => c.id === chatId)) {
+          createChat(chatId, false);
+          if (typeof cmd.title === "string") patchChat(chatId, (c) => ({ ...c, title: String(cmd.title) }));
+          window.setTimeout(() => remoteHandler.current(cmd), 150);
+          break;
+        }
+        const p = cmd.provider === "claude_code" || cmd.provider === "codex" || cmd.provider === "antigravity" ? cmd.provider : "auto";
+        if (typeof cmd.prompt === "string") void send(chatId, cmd.prompt, p as ProviderId | "auto");
+        break;
+      }
+      case "delete_chat": if (chatId) removeChat(chatId); break;
+      case "rename_chat": if (chatId && typeof cmd.title === "string") renameChat(chatId, cmd.title); break;
+      case "pin_chat": if (chatId) togglePin(chatId); break;
+      case "set_folder": if (chatId && typeof cmd.folder === "string") setFolder(chatId, cmd.folder); break;
+      case "cancel": if (typeof cmd.task_id === "string") void cancelTask(cmd.task_id); break;
+    }
+  };
+  useEffect(() => {
+    if (!desktopBridgeAvailable) return;
+    let stop: (() => void) | undefined; let disposed = false;
+    void onRemoteChatCommand((cmd) => remoteHandler.current(cmd)).then((u) => { if (disposed) u(); else stop = u; });
+    return () => { disposed = true; stop?.(); };
+  }, []);
+
+  return { chats, active, activeId: active?.id, setActiveId, createChat, removeChat, setFolder, renameChat, togglePin, send, busy, quotas, quotasAt, refreshQuotas, streams, fallbackDir };
 }

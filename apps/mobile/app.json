@@ -1,8 +1,8 @@
 {
   "expo": {
-    "name": "Psylium Remote",
-    "slug": "psylium-remote",
-    "scheme": "orchestratorremote",
+    "name": "Chel",
+    "slug": "chel",
+    "scheme": "chel",
     "version": "0.1.0",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
@@ -11,7 +11,7 @@
       [
         "expo-camera",
         {
-          "cameraPermission": "Permita que o Psylium leia o QR Code de pareamento."
+          "cameraPermission": "Permita que o Chel leia o QR Code de pareamento."
         }
       ],
       "expo-secure-store",
@@ -28,10 +28,10 @@
       "typedRoutes": true
     },
     "android": {
-      "package": "com.local.psylium.remote"
+      "package": "com.local.chel.remote"
     },
     "ios": {
-      "bundleIdentifier": "com.local.psylium.remote",
+      "bundleIdentifier": "com.local.chel.remote",
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsLocalNetworking": true

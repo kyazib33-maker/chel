@@ -446,6 +446,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "chel-desktop"
+version = "0.1.0"
+dependencies = [
+ "agent-router",
+ "antigravity-adapter",
+ "chrono",
+ "claude-code-adapter",
+ "codex-app-server",
+ "orchestrator-intelligence",
+ "permission-engine",
+ "process-manager",
+ "provider-adapters",
+ "provider-runtime",
+ "remote-server",
+ "serde",
+ "serde_json",
+ "session-manager",
+ "shared-protocol",
+ "tauri",
+ "tauri-build",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "usage-monitor",
+ "uuid",
+ "windows-sys 0.61.2",
+ "workflow-engine",
+ "workflow-runner",
+ "workspace-manager",
+]
+
+[[package]]
 name = "chrono"
 version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2934,37 +2966,6 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "psylium-desktop"
-version = "0.1.0"
-dependencies = [
- "agent-router",
- "antigravity-adapter",
- "chrono",
- "claude-code-adapter",
- "codex-app-server",
- "orchestrator-intelligence",
- "permission-engine",
- "process-manager",
- "provider-adapters",
- "provider-runtime",
- "remote-server",
- "serde",
- "serde_json",
- "session-manager",
- "shared-protocol",
- "tauri",
- "tauri-build",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "usage-monitor",
- "uuid",
- "workflow-engine",
- "workflow-runner",
- "workspace-manager",
 ]
 
 [[package]]

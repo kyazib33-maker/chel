@@ -399,7 +399,7 @@ mod tests {
         );
         git(
             temp.path(),
-            &["config", "user.name", "Psylium Test"],
+            &["config", "user.name", "Chel Test"],
         );
         git(temp.path(), &["commit", "--allow-empty", "-m", "initial"]);
         temp

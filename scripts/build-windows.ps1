@@ -11,7 +11,7 @@ function Require-Command([string]$Name) {
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) { throw "Comando obrigatório ausente: $Name" }
 }
 
-Write-Host "Psylium · Build Windows 11" -ForegroundColor Cyan
+Write-Host "Chel · Build Windows 11" -ForegroundColor Cyan
 Require-Command "node"
 Require-Command "pnpm"
 Require-Command "rustc"

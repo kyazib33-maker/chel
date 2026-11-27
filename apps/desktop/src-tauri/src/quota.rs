@@ -86,7 +86,7 @@ async fn codex_rpc(method: &str, params: Value) -> Result<Value, String> {
     let mut stdin = child.stdin.take().ok_or("sem stdin")?;
     let mut lines = BufReader::new(child.stdout.take().ok_or("sem stdout")?).lines();
     let send = |v: Value| format!("{v}\n");
-    stdin.write_all(send(json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"psylium","title":"Psylium","version":env!("CARGO_PKG_VERSION")}}})).as_bytes()).await.map_err(|e| e.to_string())?;
+    stdin.write_all(send(json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"chel","title":"Chel","version":env!("CARGO_PKG_VERSION")}}})).as_bytes()).await.map_err(|e| e.to_string())?;
     let mut sent = false;
     let reply = tokio::time::timeout(TIMEOUT, async {
         while let Ok(Some(line)) = lines.next_line().await {
@@ -160,7 +160,7 @@ pub struct ModelCatalog {
     pub antigravity: Vec<ModelInfo>,
 }
 
-/// Lists the models each CLI offers, so Psylium can pick one explicitly and show its real name.
+/// Lists the models each CLI offers, so Chel can pick one explicitly and show its real name.
 #[tauri::command]
 pub async fn model_catalog() -> ModelCatalog {
     let codex = async {

@@ -1,88 +1,57 @@
 import { useRef, useState } from "react";
-import { Alert, KeyboardAvoidingView, Linking, Platform, ScrollView, Text, TextInput, View } from "react-native";
+import { ActivityIndicator, Alert, KeyboardAvoidingView, Linking, Platform, Pressable, ScrollView, Text, TextInput, View } from "react-native";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { ActionButton, Field, PageHeader, Panel, Pill, Screen } from "../src/components/ui";
-import { useRemote } from "../src/providers/RemoteProvider";
+import { useChel } from "../src/lib/chel";
+import { formatShortCode } from "../src/lib/remote";
+import { IconButton, StatusDot } from "../src/components/ui";
 
-export default function ConnectScreen() {
+export default function Connect() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { connection, connectionStatus, pairHost, disconnect } = useRemote();
-  const [permission, requestPermission] = useCameraPermissions();
-  const [payload, setPayload] = useState("");
-  const [deviceName, setDeviceName] = useState(Platform.OS === "ios" ? "iPhone Remote" : "Android Remote");
-  const [pairing, setPairing] = useState(false);
-  const [scanned, setScanned] = useState(false);
-  const scanLockRef = useRef(false);
+  const { connection, status, connectWithCode, connectWithQr, disconnect } = useChel();
+  const [code, setCode] = useState("");
+  const [name, setName] = useState("Meu Android");
+  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [permission, requestPermission] = useCameraPermissions();
+  const lock = useRef(false);
 
-  async function pair(value = payload): Promise<boolean> {
-    setError(null);
-    if (!value.trim()) { setError("Escaneie o QR Code do Desktop ou cole o conteúdo do QR."); return false; }
-    setPairing(true);
-    try {
-      await pairHost(value.trim(), deviceName.trim() || "Mobile Remote");
-      Alert.alert("Dispositivo pareado", "Este celular agora está autorizado a controlar o Host.", [{ text: "Continuar", onPress: () => router.back() }]);
-      return true;
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-      setScanned(false);
-      return false;
-    } finally { setPairing(false); }
+  async function run(fn: () => Promise<void>) {
+    setBusy(true); setError(null);
+    try { await fn(); router.replace("/"); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); lock.current = false; }
+    finally { setBusy(false); }
   }
+  const ready = code.replace(/^CHEL-/, "").replace(/-/g, "").length === 16;
 
-  async function handleScan(data: string) {
-    if (scanLockRef.current || scanned || pairing) return;
-    scanLockRef.current = true;
-    setScanned(true);
-    setPayload(data);
-    const succeeded = await pair(data);
-    if (!succeeded) scanLockRef.current = false;
-  }
+  return <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} className="flex-1 bg-canvas">
+    <ScrollView contentContainerStyle={{ paddingTop: insets.top + 8, paddingHorizontal: 20, paddingBottom: 40 }} keyboardShouldPersistTaps="handled">
+      <View className="mb-6 flex-row items-center"><IconButton label="✕" onPress={() => router.back()} /><Text className="ml-1 text-lg font-semibold text-white">Conectar ao computador</Text></View>
 
-  async function removeConnection() {
-    Alert.alert("Desconectar computador?", "O token salvo neste dispositivo será apagado. O Host continuará ligado.", [
-      { text: "Cancelar", style: "cancel" },
-      { text: "Desconectar", style: "destructive", onPress: () => { void disconnect(); } },
-    ]);
-  }
+      {connection && <View className="mb-6 rounded-2xl border border-line bg-panel p-4">
+        <View className="flex-row items-center gap-2"><StatusDot status={status} /><Text className="text-[14px] text-white">{status === "online" ? "Conectado" : "Salvo, sem resposta agora"}</Text></View>
+        <Text className="mt-1 text-[12px] text-muted">{connection.endpoint}</Text>
+        <Pressable onPress={() => Alert.alert("Desconectar?", "Você vai precisar de um código novo para voltar.", [{ text: "Cancelar", style: "cancel" }, { text: "Desconectar", style: "destructive", onPress: () => void disconnect() }])} className="mt-3 self-start rounded-lg border border-rose-500/30 px-3 py-2"><Text className="text-[13px] text-rose-300">Desconectar este celular</Text></Pressable>
+      </View>}
 
-  return <Screen>
-    <KeyboardAvoidingView className="flex-1" behavior={Platform.OS === "ios" ? "padding" : undefined}>
-      <ScrollView className="flex-1 px-5" contentContainerStyle={{ paddingTop: Math.max(insets.top, 16) + 12, paddingBottom: 30 }} keyboardShouldPersistTaps="handled">
-        <PageHeader eyebrow="PAIRING" title="Conectar computador" subtitle="No Desktop, habilite a rede local e gere um QR de pareamento." action={<Text onPress={() => router.back()} className="rounded-lg border border-line px-3 py-2 text-xs text-zinc-300">Fechar</Text>} />
-        {connection ? <Panel className="mb-4">
-          <View className="flex-row items-center justify-between"><Text className="text-xs font-semibold text-white">Host salvo</Text><Pill tone={connectionStatus === "connected" ? "green" : "amber"}>{connectionStatus === "connected" ? "Online" : "Reconectando"}</Pill></View>
-          <Text className="mt-2 text-sm text-zinc-200">{connection.endpoint}</Text>
-          <Text className="mt-1 text-[10px] text-muted">ID do dispositivo: {connection.device_id.slice(0, 12)}</Text>
-          <View className="mt-4"><ActionButton title="Remover pareamento" variant="danger" onPress={() => removeConnection()} /></View>
-        </Panel> : null}
+      <Text className="text-[13px] leading-5 text-muted">No Chel do computador, abra <Text className="text-zinc-200">Usar no celular</Text> → <Text className="text-zinc-200">Ligar e gerar código</Text>, e digite o código aqui.</Text>
+      <TextInput value={code} onChangeText={(v) => setCode(formatShortCode(v))} autoCapitalize="characters" autoCorrect={false} placeholder="CHEL-XXXX-XXXX-XXXX-XXXX" placeholderTextColor="#52525b"
+        className="mt-4 rounded-xl border border-line bg-panel px-4 py-4 text-center text-[19px] tracking-wider text-white" style={{ fontFamily: "monospace" }} />
+      <Text className="mb-1.5 mt-4 text-[12px] text-muted">Nome deste celular</Text>
+      <TextInput value={name} onChangeText={setName} placeholderTextColor="#52525b" className="rounded-xl border border-line bg-panel px-4 py-3 text-[15px] text-white" />
+      <Pressable disabled={!ready || busy} onPress={() => void run(() => connectWithCode(code, name.trim() || "Android"))} className={`mt-5 items-center rounded-xl py-3.5 ${ready && !busy ? "bg-zinc-100" : "bg-zinc-700"}`}>
+        {busy ? <ActivityIndicator color="#18181b" /> : <Text className="font-semibold text-zinc-900">Conectar</Text>}
+      </Pressable>
+      {error && <Text className="mt-4 rounded-xl bg-rose-500/10 p-3 text-[13px] leading-5 text-rose-200">{error}</Text>}
 
-        <Panel className="mb-4">
-          <Text className="mb-3 text-xs font-semibold text-white">1. Escanear QR Code</Text>
-          {permission?.granted ? <View className="overflow-hidden rounded-xl border border-line bg-black">
-            <CameraView style={{ height: 270, width: "100%" }} facing="back" barcodeScannerSettings={{ barcodeTypes: ["qr"] }} onBarcodeScanned={scanned ? undefined : ({ data }) => { void handleScan(data); }} />
-          </View> : <View className="items-center rounded-xl border border-line bg-canvas px-4 py-8">
-            <Text className="text-center text-xs font-semibold text-zinc-200">A câmera é necessária para ler o código.</Text>
-            <Text className="mt-2 text-center text-[10px] leading-5 text-muted">A permissão será usada apenas para capturar o QR de pareamento.</Text>
-            <View className="mt-4 w-full"><ActionButton title={permission?.canAskAgain === false ? "Permitir câmera nas configurações" : "Permitir câmera"} onPress={() => permission?.canAskAgain ? void requestPermission() : void Linking.openSettings()} /></View>
-          </View>}
-          {scanned ? <View className="mt-3"><ActionButton title="Escanear novamente" variant="secondary" onPress={() => { scanLockRef.current = false; setScanned(false); setPayload(""); setError(null); }} /></View> : null}
-        </Panel>
-
-        <Panel className="mb-4 gap-4">
-          <Text className="text-xs font-semibold text-white">2. Identificar este dispositivo</Text>
-          <Field label="Nome do dispositivo" value={deviceName} onChangeText={setDeviceName} placeholder="Ex.: Meu celular" />
-          <Text className="text-[10px] font-semibold uppercase tracking-widest text-muted">Alternativa: colar payload do QR</Text>
-          <TextInput value={payload} onChangeText={setPayload} multiline numberOfLines={4} textAlignVertical="top" autoCapitalize="none" autoCorrect={false} placeholder="Cole o conteúdo JSON do QR Code..." placeholderTextColor="#71717a" className="min-h-24 rounded-xl border border-line bg-canvas p-3 text-[10px] leading-5 text-zinc-200" />
-          <ActionButton title="Parear com este Host" onPress={() => void pair()} loading={pairing} disabled={!payload.trim()} />
-        </Panel>
-
-        {error ? <View className="rounded-xl border border-rose-500/20 bg-rose-500/10 p-3"><Text className="text-xs leading-5 text-rose-300">{error}</Text></View> : null}
-        <Text className="mt-2 text-[9px] leading-5 text-muted">O pareamento é de uso único e expira após 180 segundos. O token do dispositivo é armazenado no SecureStore. Não compartilhe o QR nem o conteúdo JSON com terceiros.</Text>
-      </ScrollView>
-    </KeyboardAvoidingView>
-  </Screen>;
+      <View className="my-7 flex-row items-center gap-3"><View className="h-px flex-1 bg-line" /><Text className="text-[12px] text-muted">ou</Text><View className="h-px flex-1 bg-line" /></View>
+      {!scanning ? <Pressable onPress={async () => { if (!permission?.granted) { const r = await requestPermission(); if (!r.granted) { if (!r.canAskAgain) void Linking.openSettings(); return; } } setScanning(true); }} className="items-center rounded-xl border border-line py-3.5"><Text className="text-[14px] text-zinc-200">Ler o QR Code com a câmera</Text></Pressable>
+        : <View className="overflow-hidden rounded-xl border border-line"><CameraView style={{ height: 280, width: "100%" }} facing="back" barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+          onBarcodeScanned={({ data }) => { if (lock.current) return; lock.current = true; setScanning(false); void run(() => connectWithQr(data, name.trim() || "Android")); }} /></View>}
+      <Text className="mt-6 text-[11px] leading-5 text-muted">Funciona no mesmo Wi-Fi do computador. Para usar fora de casa, instale o Tailscale no PC e no celular e use o código marcado “Tailscale”. O código vale 3 minutos e serve uma vez.</Text>
+    </ScrollView>
+  </KeyboardAvoidingView>;
 }

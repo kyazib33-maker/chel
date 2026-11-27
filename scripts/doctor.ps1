@@ -1,5 +1,5 @@
 $ErrorActionPreference = "Continue"
-Write-Host "Psylium - Diagnóstico Windows" -ForegroundColor Cyan
+Write-Host "Chel - Diagnóstico Windows" -ForegroundColor Cyan
 Write-Host "Data: $(Get-Date -Format s)"
 Write-Host "SO: $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription)"
 Write-Host "Arquitetura: $([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture)"

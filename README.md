@@ -1,4 +1,4 @@
-# Psylium
+# Chel
 
 Monorepo para orquestrar localmente Claude Code, Codex CLI e Antigravity, com Host Rust, Desktop Tauri e Remote Control Expo. O projeto usa as autenticações já existentes dos CLIs; não solicita chaves de API.
 

@@ -160,3 +160,6 @@ export const defaultWorkspace = () => invoke<string>("default_workspace");
 export type ModelInfo = { id: string; name: string };
 export type ModelCatalog = { codex_default: string | null; codex: ModelInfo[]; antigravity: ModelInfo[] };
 export const modelCatalog = () => invoke<ModelCatalog>("model_catalog");
+export const publishChatState = (state: unknown) => invoke<void>("publish_chat_state", { state });
+export const onRemoteChatCommand = (handler: (command: Record<string, unknown>) => void): Promise<UnlistenFn> =>
+  listen<Record<string, unknown>>("remote-chat-command", (event) => handler(event.payload));

@@ -240,7 +240,7 @@ impl ClaudeCodeManager {
         let response = if allow {
             json!({"behavior":"allow","updatedInput":updated_input.unwrap_or(Value::Null)})
         } else {
-            json!({"behavior":"deny","message":message.unwrap_or_else(|| "Negado pelo usuário no Psylium".into())})
+            json!({"behavior":"deny","message":message.unwrap_or_else(|| "Negado pelo usuário no Chel".into())})
         };
         self.write(&session, json!({"type":"control_response","response":{"subtype":"success","request_id":request_id,"response":response}})).await
     }
@@ -370,7 +370,7 @@ impl ClaudeApprovalBridge {
                     event.session_id,
                     request_id,
                     format!(
-                        "Psylium não implementa o control request '{subtype}' nesta versão"
+                        "Chel não implementa o control request '{subtype}' nesta versão"
                     ),
                 )
                 .await
@@ -405,7 +405,7 @@ impl ClaudeApprovalBridge {
                         request_id,
                         false,
                         None,
-                        Some("Bloqueado pela política do Psylium".into()),
+                        Some("Bloqueado pela política do Chel".into()),
                     )
                     .await
                     .map_err(|_| PermissionError::NotPending)?;
@@ -501,7 +501,7 @@ impl ClaudeApprovalBridge {
                     if approve {
                         None
                     } else {
-                        Some("Negado pelo usuário no Psylium".into())
+                        Some("Negado pelo usuário no Chel".into())
                     },
                 )
                 .await;

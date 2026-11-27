@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { MessageSquarePlus, PanelRightClose, PanelRightOpen, Puzzle, ShieldCheck, Smartphone, Trash2 } from "lucide-react";
+import { MessageSquarePlus, PanelRightClose, PanelRightOpen, Pin, Puzzle, ShieldCheck, Smartphone } from "lucide-react";
+import { useContextMenu } from "./lib/contextMenu";
 import ChatView from "./features/chat/ChatView";
 import ActivityPanel from "./features/chat/ActivityPanel";
 import { finished } from "./features/chat/engine";
@@ -23,6 +24,9 @@ export default function App() {
   const [events, setEvents] = useState<TaskEvent[]>([]);
   const [showActivity, setShowActivity] = useState(true);
   const hub = useChats(tasks, events);
+  const menu = useContextMenu();
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
 
   async function refresh() {
     if (!desktopBridgeAvailable) return;
@@ -63,8 +67,8 @@ export default function App() {
     <main className="flex h-screen overflow-hidden bg-canvas text-zinc-100">
       <aside className="flex w-[260px] shrink-0 flex-col border-r border-line/70 bg-sidebar">
         <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-400 to-fuchsia-500 text-[15px] font-bold text-white shadow-lg shadow-violet-500/20">P</div>
-          <div><p className="text-[14px] font-semibold tracking-tight">Psylium</p><p className="text-[11px] text-muted">Suas IAs num lugar só</p></div>
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-400 to-fuchsia-500 text-[15px] font-bold text-white shadow-lg shadow-violet-500/20">C</div>
+          <div><p className="text-[14px] font-semibold tracking-tight">Chel</p><p className="text-[11px] text-muted">Suas IAs num lugar só</p></div>
         </div>
         <div className="px-3">
           <button onClick={() => { hub.createChat(); setPage("chat"); }} className="flex w-full items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-[13px] text-zinc-200 transition hover:border-zinc-600 hover:bg-raised"><MessageSquarePlus size={15} />Nova conversa</button>
@@ -72,14 +76,25 @@ export default function App() {
 
         <p className="px-5 pb-1.5 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted">Conversas</p>
         <div className="flex-1 space-y-0.5 overflow-y-auto px-2">
-          {[...hub.chats].sort((a, b) => b.updatedAt - a.updatedAt).map((c) => {
+          {[...hub.chats].sort((a, b) => Number(!!b.pinned) - Number(!!a.pinned) || b.updatedAt - a.updatedAt).map((c, i, all) => {
             const on = page === "chat" && c.id === hub.activeId;
             const live = runningIn(c.id);
-            return <div key={c.id} onClick={() => { hub.setActiveId(c.id); setPage("chat"); }} className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition ${on ? "bg-raised" : "hover:bg-raised/60"}`}>
-              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? "animate-pulse" : ""}`} style={{ background: live ? brand[live].color : "transparent" }} />
-              <span className={`min-w-0 flex-1 truncate text-[13px] ${on ? "text-white" : "text-zinc-400 group-hover:text-zinc-200"}`}>{c.title}</span>
-              <span className="text-[10px] text-muted group-hover:hidden">{ago(c.updatedAt)}</span>
-              <button onClick={(e) => { e.stopPropagation(); if (confirm(`Apagar a conversa "${c.title}"?`)) hub.removeChat(c.id); }} className="hidden rounded p-0.5 text-muted hover:text-rose-300 group-hover:block" title="Apagar conversa"><Trash2 size={12} /></button>
+            const firstUnpinned = !c.pinned && i > 0 && all[i - 1].pinned;
+            return <div key={c.id}>
+              {firstUnpinned && <div className="mx-2.5 my-1.5 h-px bg-line/70" />}
+              <div onClick={() => { hub.setActiveId(c.id); setPage("chat"); }}
+                onContextMenu={(e) => menu.open(e, [
+                  { label: "Renomear", action: () => { setRenaming(c.id); setDraft(c.title); } },
+                  { label: c.pinned ? "Desafixar" : "Fixar no topo", action: () => hub.togglePin(c.id) },
+                  { label: "Apagar", danger: true, action: () => { if (confirm(`Apagar a conversa "${c.title}"?`)) hub.removeChat(c.id); } },
+                ])}
+                className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition ${on ? "bg-raised" : "hover:bg-raised/60"}`}>
+                <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? "animate-pulse" : ""}`} style={{ background: live ? brand[live].color : "transparent" }} />
+                {renaming === c.id
+                  ? <input autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onClick={(e) => e.stopPropagation()} onBlur={() => { hub.renameChat(c.id, draft); setRenaming(null); }} onKeyDown={(e) => { if (e.key === "Enter") { hub.renameChat(c.id, draft); setRenaming(null); } if (e.key === "Escape") setRenaming(null); }} className="min-w-0 flex-1 rounded bg-canvas px-1.5 py-0.5 text-[13px] text-white outline-none ring-1 ring-zinc-600" />
+                  : <span className={`min-w-0 flex-1 truncate text-[13px] ${on ? "text-white" : "text-zinc-400 group-hover:text-zinc-200"}`}>{c.title}</span>}
+                {c.pinned ? <Pin size={11} className="shrink-0 text-muted" /> : <span className="text-[10px] text-muted">{ago(c.updatedAt)}</span>}
+              </div>
             </div>;
           })}
         </div>

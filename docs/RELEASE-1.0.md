@@ -1,4 +1,4 @@
-# Release gate — Psylium 1.0
+# Release gate — Chel 1.0
 
 A versão 1.0 só está aprovada quando todos os itens abaixo passarem em uma máquina Windows 11 real:
 

@@ -550,7 +550,7 @@ impl WorkflowRunner {
                         "Workflow {} (workspace compartilhado)",
                         request.workflow.name
                     ),
-                    branch_name: format!("psylium/{}/team", &safe_workflow[..8]),
+                    branch_name: format!("chel/{}/team", &safe_workflow[..8]),
                     base_ref: "HEAD".into(),
                 })
                 .await
@@ -994,7 +994,7 @@ async fn execute_node(
                 })
                 .collect::<String>();
             let branch_name = format!(
-                "psylium/{}/{}",
+                "chel/{}/{}",
                 &workflow_id.simple().to_string()[..8],
                 safe_node
             );

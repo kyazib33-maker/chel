@@ -1,4 +1,4 @@
-//! Operational intelligence primitives for the Psylium.
+//! Operational intelligence primitives for the Chel.
 //!
 //! This crate deliberately does not inspect CLI credentials, infer official quotas,
 //! or hard-code provider prices. Cost estimates are available only after the operator

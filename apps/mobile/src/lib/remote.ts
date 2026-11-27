@@ -1,6 +1,6 @@
 import * as SecureStore from "expo-secure-store";
 
-const CONNECTION_KEY = "psylium.remote-connection.v1";
+const CONNECTION_KEY = "chel.remote-connection.v1";
 
 export interface HostPairingPayload {
   version: number;
@@ -14,11 +14,6 @@ export interface RemoteConnection {
   device_id: string;
   device_token: string;
   paired_at: string;
-}
-
-export interface RemoteEnvelope<T = unknown> {
-  type: string;
-  data?: T;
 }
 
 /** Only accept private/LAN or Tailscale addresses emitted by our Host QR. */
@@ -134,30 +129,55 @@ export async function remoteFetch<T>(path: string, init: RequestInit = {}): Prom
     const body = await response.json().catch(() => null);
     throw new Error(body?.error?.message ?? `Falha HTTP ${response.status}`);
   }
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+  const text = await response.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
-export async function openRemoteSocket(
-  lastSequence: number | null,
-  onMessage: (message: RemoteEnvelope) => void,
-  onClose?: () => void,
-): Promise<WebSocket> {
-  const connection = await loadRemoteConnection();
-  if (!connection) throw new Error("Nenhum computador pareado.");
-  const socketUrl = `${connection.endpoint.replace(/^http:/, "ws:").replace(/^https:/, "wss:")}/ws`;
-  const socket = new WebSocket(socketUrl);
-  socket.onopen = () => {
-    socket.send(JSON.stringify({
-      type: "authenticate",
-      token: connection.device_token,
-      last_sequence: lastSequence,
-    }));
-  };
-  socket.onmessage = (event) => {
-    try { onMessage(JSON.parse(String(event.data)) as RemoteEnvelope); }
-    catch { /* Ignore malformed frames; the caller can request a fresh snapshot. */ }
-  };
-  socket.onclose = () => onClose?.();
-  return socket;
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/** Normalizes what the user typed: "chel 7k2q-9f4m…" → "CHEL-7K2Q-9F4M-…". */
+export function formatShortCode(input: string): string {
+  const body = input.toUpperCase().replace(/^CHEL/, "").replace(/[^0-9A-Z]/g, "").replace(/[IL]/g, "1").replace(/O/g, "0").slice(0, 16);
+  const groups = body.match(/.{1,4}/g) ?? [];
+  return groups.length ? `CHEL-${groups.join("-")}` : "";
+}
+
+/** "CHEL-XXXX-XXXX-XXXX-XXXX" carries the PC address, port and a one-time secret. */
+export function decodeShortCode(code: string): { endpoint: string; secret: string } {
+  const body = formatShortCode(code).replace(/^CHEL-/, "").replace(/-/g, "");
+  if (body.length !== 16) throw new Error("O código tem 16 letras/números depois de CHEL-.");
+  let bits = 0; let value = 0; const bytes: number[] = [];
+  for (const ch of body) {
+    const v = CROCKFORD.indexOf(ch);
+    if (v < 0) throw new Error("Código inválido.");
+    value = (value << 5) | v; bits += 5;
+    if (bits >= 8) { bits -= 8; bytes.push((value >> bits) & 0xff); value &= (1 << bits) - 1; }
+  }
+  if (bytes.length < 10) throw new Error("Código incompleto.");
+  const [a, b, c, d, p1, p2, ...secret] = bytes;
+  const endpoint = validateHostEndpoint(`http://${a}.${b}.${c}.${d}:${(p1 << 8) | p2}`);
+  return { endpoint, secret: secret.slice(0, 4).map((x) => x.toString(16).padStart(2, "0")).join("") };
+}
+
+/** Pairs using the short code typed by the user. */
+export async function pairWithCode(code: string, deviceName: string): Promise<RemoteConnection> {
+  const { endpoint, secret } = decodeShortCode(code);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 6_000);
+  try {
+    const response = await fetch(`${endpoint}/api/v1/pair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pairing_code: secret, device_name: deviceName }),
+      signal: controller.signal,
+    });
+    const body = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(body?.error?.message ?? `Erro ${response.status}`);
+    const connection: RemoteConnection = { endpoint, device_id: body.device_id, device_token: body.device_token, paired_at: new Date().toISOString() };
+    await SecureStore.setItemAsync(CONNECTION_KEY, JSON.stringify(connection));
+    return connection;
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") throw new Error("O computador não respondeu. Confira se o celular está no mesmo Wi-Fi (ou no Tailscale) e se o Chel está aberto.");
+    throw error;
+  } finally { clearTimeout(timeout); }
 }

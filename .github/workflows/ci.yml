@@ -51,6 +51,6 @@ jobs:
       - run: pnpm --filter @orchestrator/desktop exec tauri build
       - uses: actions/upload-artifact@v4
         with:
-          name: psylium-windows-bundles
+          name: chel-windows-bundles
           path: apps/desktop/src-tauri/target/release/bundle/**
           if-no-files-found: error

@@ -211,7 +211,7 @@ impl CodexAppServerManager {
         });
 
         let init = self.request(&session, "initialize", json!({
-            "clientInfo": { "name": "psylium", "title": "Psylium", "version": env!("CARGO_PKG_VERSION") },
+            "clientInfo": { "name": "chel", "title": "Chel", "version": env!("CARGO_PKG_VERSION") },
             "capabilities": { "experimentalApi": false }
         })).await;
         if let Err(error) = init {

@@ -5,7 +5,7 @@ $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 $failures = [System.Collections.Generic.List[string]]::new()
 
-Write-Host "Psylium · revisão de segurança local" -ForegroundColor Cyan
+Write-Host "Chel · revisão de segurança local" -ForegroundColor Cyan
 $secretPatterns = @(
   @{ Name = "OpenAI-style key"; Regex = 'sk-[A-Za-z0-9_-]{24,}' },
   @{ Name = "Anthropic-style key"; Regex = 'sk-ant-[A-Za-z0-9_-]{20,}' },

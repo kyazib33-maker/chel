@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { ArrowUp, FolderOpen, Square, Wand2 } from "lucide-react";
 import { brand, effortName, ProviderMark } from "../../lib/providers";
 import { cancelTask, desktopBridgeAvailable, type ProviderId, type TaskSnapshot } from "../../lib/tauri";
-import { finished, prettyModel, qualityLabel, type Chat, type Quality } from "./engine";
+import { finished, prettyModel, type Chat } from "./engine";
+import { useContextMenu } from "../../lib/contextMenu";
 import type { useChats } from "./useChats";
 import Markdown from "./Markdown";
 
@@ -15,6 +16,7 @@ export default function ChatView({ hub, tasks }: { hub: Hub; tasks: TaskSnapshot
   const [forced, setForced] = useState<ProviderId | "auto">("auto");
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const menu = useContextMenu();
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" }); }, [chat?.id, chat?.turns.length, chat?.turns[chat.turns.length - 1]?.answer]);
   useEffect(() => { input.current?.focus(); setText(""); setForced("auto"); }, [chat?.id]);
@@ -34,13 +36,10 @@ export default function ChatView({ hub, tasks }: { hub: Hub; tasks: TaskSnapshot
   return <div className="flex h-screen min-w-0 flex-1 flex-col">
     <header className="flex items-center gap-3 border-b border-line/70 py-3 pl-6 pr-14">
       <h1 className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-200">{chat.title}</h1>
-      <label className="group flex w-72 items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted transition hover:bg-raised focus-within:bg-raised" title="Pasta onde a IA trabalha">
+      <label className="group flex w-56 shrink-0 items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-muted transition hover:bg-raised focus-within:bg-raised" title="Pasta onde a IA trabalha">
         <FolderOpen size={13} className="shrink-0" />
-        <input value={chat.folder} onChange={(e) => hub.setFolder(chat.id, e.target.value)} placeholder={hub.fallbackDir ? "Documentos\\Psylium (padrão)" : "Pasta (opcional)"} className="min-w-0 flex-1 bg-transparent text-zinc-300 outline-none placeholder:text-muted" />
+        <input value={chat.folder} onChange={(e) => hub.setFolder(chat.id, e.target.value)} placeholder={hub.fallbackDir ? "Documentos\\Chel (padrão)" : "Pasta (opcional)"} className="min-w-0 flex-1 bg-transparent text-zinc-300 outline-none placeholder:text-muted" />
       </label>
-      <div className="flex rounded-lg bg-raised p-0.5 text-xs" title="Econômico gasta menos; Caprichado usa modelos melhores">
-        {(Object.keys(qualityLabel) as Quality[]).map((q) => <button key={q} onClick={() => hub.setQuality(chat.id, q)} className={`rounded-md px-2.5 py-1 transition ${chat.quality === q ? "bg-zinc-700/80 text-white shadow-sm" : "text-muted hover:text-zinc-200"}`}>{qualityLabel[q]}</button>)}
-      </div>
     </header>
 
     <div className="flex-1 overflow-y-auto">
@@ -48,7 +47,7 @@ export default function ChatView({ hub, tasks }: { hub: Hub; tasks: TaskSnapshot
         {chat.turns.length === 0 && <div className="pt-[18vh] text-center">
           <div className="mx-auto flex w-fit items-center gap-3 opacity-90">{(["claude_code", "codex", "antigravity"] as ProviderId[]).map((p) => <ProviderMark key={p} provider={p} size={22} />)}</div>
           <h2 className="mt-5 text-2xl font-semibold tracking-tight">Como posso ajudar?</h2>
-          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">Escreva normalmente. O Psylium escolhe a IA e o modelo que entregam bem gastando pouco — ou diga “usa o Codex” para escolher você.</p>
+          <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">Escreva normalmente. O Chel escolhe a IA, o modelo e o esforço pela complexidade do pedido, sempre gastando pouco — ou diga “usa o Codex” para escolher você.</p>
         </div>}
 
         {chat.turns.map((turn) => {
@@ -64,10 +63,10 @@ export default function ChatView({ hub, tasks }: { hub: Hub; tasks: TaskSnapshot
           const model = last?.modelName ?? (turn.route?.model ? prettyModel(turn.route.model) : null);
           const effort = turn.route ? effortName[turn.route.effort] ?? turn.route.effort : null;
           return <div key={turn.id} className="space-y-4">
-            <div className="flex justify-end"><div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-raised px-4 py-2.5 text-[14px] leading-relaxed text-zinc-100">{turn.prompt}</div></div>
+            <div className="flex justify-end"><div onContextMenu={(e) => menu.open(e, [{ label: "Copiar", action: () => void navigator.clipboard.writeText(window.getSelection()?.toString() || turn.prompt) }])} className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-raised px-4 py-2.5 text-[14px] leading-relaxed text-zinc-100">{turn.prompt}</div></div>
             <div className="flex gap-3">
               <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ring-1" style={{ background: b?.soft ?? "#1b1b21", ["--tw-ring-color" as string]: (b?.color ?? "#3f3f46") + "55" }}>{provider ? <ProviderMark provider={provider} size={15} /> : <Wand2 size={13} className="text-muted" />}</div>
-              <div className="min-w-0 flex-1">
+              <div className="min-w-0 flex-1" onContextMenu={(e) => menu.open(e, [{ label: "Copiar", action: () => void navigator.clipboard.writeText(window.getSelection()?.toString() || reply || turn.prompt) }])}>
                 <div className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px]" title={turn.route?.rationale.join("\n")}>
                   {b ? <span className="font-semibold" style={{ color: b.color }}>{b.name}</span> : <span className="text-muted">Escolhendo a IA…</span>}
                   {model && <span className="rounded-md bg-raised px-1.5 py-0.5 text-zinc-300">{model}</span>}
@@ -92,7 +91,7 @@ export default function ChatView({ hub, tasks }: { hub: Hub; tasks: TaskSnapshot
     <div className="px-6 pb-5">
       <div className="mx-auto max-w-3xl rounded-2xl border border-line bg-panel shadow-[0_8px_30px_rgba(0,0,0,0.35)] transition focus-within:border-zinc-600">
         <textarea ref={input} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }} rows={1}
-          placeholder={ready ? "Mensagem para o Psylium…" : desktopBridgeAvailable ? "Preparando…" : "Abra pelo app instalado para conversar"}
+          placeholder={ready ? "Mensagem para o Chel…" : desktopBridgeAvailable ? "Preparando…" : "Abra pelo app instalado para conversar"}
           className="block max-h-[200px] w-full resize-none bg-transparent px-4 pb-2 pt-3.5 text-[14px] leading-relaxed outline-none placeholder:text-muted" />
         <div className="flex items-center justify-between px-2.5 pb-2.5">
           <div className="flex items-center gap-0.5 rounded-lg bg-raised p-0.5" title="Qual IA responde">

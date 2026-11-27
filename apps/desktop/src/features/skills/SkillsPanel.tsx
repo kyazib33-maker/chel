@@ -6,7 +6,7 @@ import { desktopBridgeAvailable } from "../../lib/tauri";
 type Skill = { name: string; description: string; sources: string[]; in_library: boolean };
 type Report = { imported: number; shared: number; library_path: string; skills: Skill[] };
 
-const tone: Record<string, string> = { Claude: "#D97757", Codex: "#F4F4F5", Antigravity: "#4285F4", Compartilhada: "#a1a1aa", Psylium: "#a78bfa" };
+const tone: Record<string, string> = { Claude: "#D97757", Codex: "#F4F4F5", Antigravity: "#4285F4", Compartilhada: "#a1a1aa", Chel: "#a78bfa" };
 
 export default function SkillsPanel() {
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -21,7 +21,7 @@ export default function SkillsPanel() {
     try {
       const r = await invoke<Report>("import_skills");
       setSkills(r.skills);
-      setMessage(`${r.imported} skill(s) novas no Psylium e ${r.shared} cópia(s) entregues às IAs. Biblioteca: ${r.library_path}`);
+      setMessage(`${r.imported} skill(s) novas no Chel e ${r.shared} cópia(s) entregues às IAs. Biblioteca: ${r.library_path}`);
     } catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }
@@ -30,7 +30,7 @@ export default function SkillsPanel() {
 
   return <div className="mx-auto max-w-4xl">
     <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
-      <div><h1 className="text-lg font-semibold">Skills</h1><p className="text-sm text-muted">Habilidades extras de todas as suas IAs, reunidas no Psylium e compartilhadas entre elas.</p></div>
+      <div><h1 className="text-lg font-semibold">Skills</h1><p className="text-sm text-muted">Habilidades extras de todas as suas IAs, reunidas no Chel e compartilhadas entre elas.</p></div>
       <button disabled={!desktopBridgeAvailable || busy} onClick={() => void importAll()} className="flex items-center gap-2 rounded-lg bg-accent px-4 py-2.5 text-sm font-semibold text-zinc-950 disabled:opacity-40"><Download size={15} />{busy ? "Importando…" : missing > 0 ? `Importar ${missing} skill(s)` : "Importar de novo"}</button>
     </div>
     {!desktopBridgeAvailable && <p className="mb-4 text-sm text-amber-300">Abra pelo app instalado para ver as skills.</p>}

@@ -8,11 +8,12 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        canvas: "#09090b",
-        panel: "#18181b",
-        accent: "#c4b5fd",
-        muted: "#a1a1aa",
-        line: "#303039",
+        canvas: "#0d0d10",
+        panel: "#141418",
+        raised: "#1c1c22",
+        accent: "#b7a4ff",
+        muted: "#86868f",
+        line: "#25252c",
       },
     },
   },
