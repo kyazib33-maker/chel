@@ -4,10 +4,12 @@ export default {
   theme: {
     extend: {
       colors: {
-        canvas: "#09090b",
-        panel: "#111115",
-        line: "#26262d",
-        muted: "#92929d",
+        canvas: "#0d0d10",
+        sidebar: "#0a0a0d",
+        panel: "#141418",
+        raised: "#1c1c22",
+        line: "#25252c",
+        muted: "#86868f",
         accent: "#b7a4ff"
       }
     }

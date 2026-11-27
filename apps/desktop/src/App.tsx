@@ -1,33 +1,32 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { Activity, Command, LayoutDashboard, MessageCircle, Puzzle, ShieldCheck, Smartphone } from "lucide-react";
-import ChatHome from "./features/chat/ChatHome";
-import Dashboard from "./features/dashboard/Dashboard";
+import { useEffect, useState, type ReactNode } from "react";
+import { MessageSquarePlus, PanelRightClose, PanelRightOpen, Puzzle, ShieldCheck, Smartphone, Trash2 } from "lucide-react";
+import ChatView from "./features/chat/ChatView";
+import ActivityPanel from "./features/chat/ActivityPanel";
+import { finished } from "./features/chat/engine";
+import { useChats } from "./features/chat/useChats";
 import SkillsPanel from "./features/skills/SkillsPanel";
 import RemotePanel from "./features/remote/RemotePanel";
 import ApprovalsPanel from "./features/approvals/ApprovalsPanel";
+import { brand } from "./lib/providers";
 import { desktopBridgeAvailable, listTasks, onTaskEvent, type TaskEvent, type TaskSnapshot } from "./lib/tauri";
 
-type Page = "chat" | "dashboard" | "skills" | "approvals" | "remote";
-type NavItem = { id: Page; label: string; hint: string; icon: ReactNode };
+type Page = "chat" | "skills" | "approvals" | "remote";
 
-const nav: NavItem[] = [
-  { id: "chat", label: "Conversar", hint: "", icon: <MessageCircle size={16} /> },
-  { id: "dashboard", label: "Painel", hint: "", icon: <LayoutDashboard size={16} /> },
-  { id: "skills", label: "Skills", hint: "", icon: <Puzzle size={16} /> },
-  { id: "approvals", label: "Pedidos de permissão", hint: "A IA quer fazer algo e precisa do seu OK", icon: <ShieldCheck size={16} /> },
-  { id: "remote", label: "Usar no celular", hint: "Conecte o app do celular por QR Code", icon: <Smartphone size={16} /> },
-];
+function ago(t: number) {
+  const m = Math.round((Date.now() - t) / 60000);
+  return m < 1 ? "agora" : m < 60 ? `${m} min` : m < 1440 ? `${Math.round(m / 60)} h` : `${Math.round(m / 1440)} d`;
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>("chat");
   const [tasks, setTasks] = useState<TaskSnapshot[]>([]);
   const [events, setEvents] = useState<TaskEvent[]>([]);
-
-  const activeCount = useMemo(() => tasks.filter((task) => ["queued", "starting", "running", "cancelling", "awaiting_approval"].includes(task.status)).length, [tasks]);
+  const [showActivity, setShowActivity] = useState(true);
+  const hub = useChats(tasks, events);
 
   async function refresh() {
     if (!desktopBridgeAvailable) return;
-    try { setTasks(await listTasks()); } catch { /* shown per page */ }
+    try { setTasks(await listTasks()); } catch { /* ignore */ }
   }
 
   useEffect(() => {
@@ -36,14 +35,13 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     let disposed = false;
     void onTaskEvent((event) => {
-      setEvents((current) => [...current.slice(-4999), event]);
+      setEvents((current) => [...current.slice(-7999), event]);
       if (event.payload.type === "state_changed") void refresh();
       setTasks((current) => current.map((task) => {
         if (task.task_id !== event.task_id) return task;
         switch (event.payload.type) {
           case "state_changed": return { ...task, status: event.payload.data.status };
           case "error": return { ...task, last_error: event.payload.data.message };
-          case "exited": return { ...task, exit_code: event.payload.data.code };
           default: return task;
         }
       }));
@@ -52,27 +50,59 @@ export default function App() {
     return () => { disposed = true; window.clearInterval(reconciliation); unlisten?.(); };
   }, []);
 
-  const current = nav.find((item) => item.id === page)!;
+  const runningIn = (chatId: string) => {
+    const chat = hub.chats.find((c) => c.id === chatId);
+    const last = chat?.turns[chat.turns.length - 1]?.attempts.at(-1);
+    const task = last && tasks.find((t) => t.task_id === last.taskId);
+    return task && !finished.includes(task.status) ? last.provider : null;
+  };
+
+  const navLink = (id: Page, label: string, icon: ReactNode) => <button onClick={() => setPage(id)} className={`flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-[13px] transition ${page === id ? "bg-raised text-white" : "text-zinc-400 hover:bg-raised/60 hover:text-zinc-200"}`}>{icon}{label}</button>;
 
   return (
-    <main className="flex min-h-screen bg-canvas text-zinc-100">
-      <aside className="sticky top-0 flex h-screen w-60 shrink-0 flex-col gap-1 overflow-y-auto border-r border-line p-4">
-        <div className="mb-5 flex items-center gap-3 px-2"><div className="rounded-xl border border-line bg-panel p-2 text-accent"><Command size={20} /></div><div><p className="text-sm font-semibold tracking-wide">Psylium</p><p className="text-[11px] text-muted">Suas IAs num lugar só</p></div></div>
-        {nav.map((item) => <button key={item.id} onClick={() => setPage(item.id)} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm transition ${page === item.id ? "bg-slate-700 text-white" : "text-slate-400 hover:bg-panel hover:text-white"}`}>{item.icon}<span>{item.label}</span></button>)}
-        <div className="mt-auto space-y-2 px-3 pt-4 text-xs text-muted">
-          <p className="flex items-center gap-2"><span className={`h-2 w-2 rounded-full ${desktopBridgeAvailable ? "bg-emerald-400" : "bg-amber-400"}`} />{desktopBridgeAvailable ? "Pronto" : "Abra pelo app instalado"}</p>
-          <p className="flex items-center gap-2"><Activity size={13} />{activeCount === 0 ? "Nenhuma IA trabalhando" : `${activeCount} IA(s) trabalhando`}</p>
+    <main className="flex h-screen overflow-hidden bg-canvas text-zinc-100">
+      <aside className="flex w-[260px] shrink-0 flex-col border-r border-line/70 bg-sidebar">
+        <div className="flex items-center gap-2.5 px-4 pb-3 pt-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-400 to-fuchsia-500 text-[15px] font-bold text-white shadow-lg shadow-violet-500/20">P</div>
+          <div><p className="text-[14px] font-semibold tracking-tight">Psylium</p><p className="text-[11px] text-muted">Suas IAs num lugar só</p></div>
+        </div>
+        <div className="px-3">
+          <button onClick={() => { hub.createChat(); setPage("chat"); }} className="flex w-full items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2 text-[13px] text-zinc-200 transition hover:border-zinc-600 hover:bg-raised"><MessageSquarePlus size={15} />Nova conversa</button>
+        </div>
+
+        <p className="px-5 pb-1.5 pt-5 text-[11px] font-semibold uppercase tracking-wider text-muted">Conversas</p>
+        <div className="flex-1 space-y-0.5 overflow-y-auto px-2">
+          {[...hub.chats].sort((a, b) => b.updatedAt - a.updatedAt).map((c) => {
+            const on = page === "chat" && c.id === hub.activeId;
+            const live = runningIn(c.id);
+            return <div key={c.id} onClick={() => { hub.setActiveId(c.id); setPage("chat"); }} className={`group flex cursor-pointer items-center gap-2 rounded-lg px-2.5 py-2 transition ${on ? "bg-raised" : "hover:bg-raised/60"}`}>
+              <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${live ? "animate-pulse" : ""}`} style={{ background: live ? brand[live].color : "transparent" }} />
+              <span className={`min-w-0 flex-1 truncate text-[13px] ${on ? "text-white" : "text-zinc-400 group-hover:text-zinc-200"}`}>{c.title}</span>
+              <span className="text-[10px] text-muted group-hover:hidden">{ago(c.updatedAt)}</span>
+              <button onClick={(e) => { e.stopPropagation(); if (confirm(`Apagar a conversa "${c.title}"?`)) hub.removeChat(c.id); }} className="hidden rounded p-0.5 text-muted hover:text-rose-300 group-hover:block" title="Apagar conversa"><Trash2 size={12} /></button>
+            </div>;
+          })}
+        </div>
+
+        <div className="space-y-0.5 border-t border-line/70 p-2">
+          {navLink("skills", "Skills", <Puzzle size={15} />)}
+          {navLink("approvals", "Permissões", <ShieldCheck size={15} />)}
+          {navLink("remote", "Usar no celular", <Smartphone size={15} />)}
+          <p className="flex items-center gap-2 px-2.5 pt-2 text-[11px] text-muted"><span className={`h-1.5 w-1.5 rounded-full ${desktopBridgeAvailable ? "bg-emerald-400" : "bg-amber-400"}`} />{desktopBridgeAvailable ? "Pronto" : "Abra pelo app instalado"}</p>
         </div>
       </aside>
 
-      <div className={`min-w-0 flex-1 ${page === "chat" ? "px-6 pt-6" : "p-6"}`}>
-        {current.hint && <div className="mb-5"><h1 className="text-lg font-semibold">{current.label}</h1><p className="text-sm text-muted">{current.hint}</p></div>}
-        {page === "chat" && <ChatHome tasks={tasks} events={events} />}
-        {page === "dashboard" && <Dashboard />}
+      {page === "chat" ? <>
+        <div className="relative flex min-w-0 flex-1">
+          <ChatView hub={hub} tasks={tasks} />
+          <button onClick={() => setShowActivity((v) => !v)} className="absolute right-3 top-2.5 rounded-md p-1.5 text-muted transition hover:bg-raised hover:text-zinc-200" title={showActivity ? "Esconder atividade" : "Mostrar atividade"}>{showActivity ? <PanelRightClose size={15} /> : <PanelRightOpen size={15} />}</button>
+        </div>
+        {showActivity && <ActivityPanel hub={hub} tasks={tasks} />}
+      </> : <div className="min-w-0 flex-1 overflow-y-auto p-8">
         {page === "skills" && <SkillsPanel />}
-        {page === "approvals" && <ApprovalsPanel />}
-        {page === "remote" && <RemotePanel />}
-      </div>
+        {page === "approvals" && <div className="mx-auto max-w-5xl"><h1 className="mb-1 text-lg font-semibold">Permissões</h1><p className="mb-6 text-sm text-muted">Quando uma IA quer fazer algo sensível, ela pede seu OK aqui.</p><ApprovalsPanel /></div>}
+        {page === "remote" && <div className="mx-auto max-w-5xl"><h1 className="mb-1 text-lg font-semibold">Usar no celular</h1><p className="mb-6 text-sm text-muted">Conecte o app do celular lendo o QR Code.</p><RemotePanel /></div>}
+      </div>}
     </main>
   );
 }
