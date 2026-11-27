@@ -42,7 +42,7 @@ pub fn build_process_spec(request: AgentLaunchRequest) -> Result<ProcessSpec, Ad
             "claude"
         }
         ProviderId::Codex => {
-            args.extend(["exec".into(), "--json".into()]);
+            args.extend(["exec".into(), "--json".into(), "--skip-git-repo-check".into()]);
             if let Some(model) = request.model.as_ref() {
                 args.extend(["--model".into(), model.clone()]);
             }
