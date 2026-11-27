@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { FolderOpen, Send, Sparkles, Square } from "lucide-react";
+import { FolderOpen, Plus, Send, Sparkles, Square } from "lucide-react";
+import { brand, effortName, ProviderMark } from "../../lib/providers";
 import { cancelTask, desktopBridgeAvailable, launchAgent, recommendAgentRoute, type ProviderId, type RouteRecommendation, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
 
 type Quality = "economy" | "balanced" | "maximum";
 type Attempt = { provider: ProviderId; taskId: string };
-type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[] };
+type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[]; at: number; answer?: string };
 
 const names: Record<ProviderId, string> = { claude_code: "Claude", codex: "Codex", antigravity: "Antigravity" };
-const effortName: Record<string, string> = { low: "rápido", medium: "normal", high: "caprichado", xhigh: "máximo", max: "máximo" };
 const qualityLabel: Record<Quality, string> = { economy: "Econômico", balanced: "Equilibrado", maximum: "Caprichado" };
 const finished = ["succeeded", "failed", "cancelled", "quota_exceeded"];
 const validEffort: Record<ProviderId, string[]> = { claude_code: ["low", "medium", "high", "max"], codex: ["low", "medium", "high", "xhigh"], antigravity: ["low", "medium", "high", "xhigh", "max"] };
@@ -46,12 +46,13 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
   const [folder, setFolder] = useState(() => load("psylium.folder", ""));
   const [quality, setQuality] = useState<Quality>(() => load("psylium.quality", "balanced") as Quality);
   const [text, setText] = useState("");
-  const [turns, setTurns] = useState<Turn[]>([]);
+  const [turns, setTurns] = useState<Turn[]>(() => { try { return JSON.parse(load("psylium.chat", "[]")) as Turn[]; } catch { return []; } });
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
 
   useEffect(() => save("psylium.folder", folder), [folder]);
   useEffect(() => save("psylium.quality", quality), [quality]);
+  useEffect(() => save("psylium.chat", JSON.stringify(turns.slice(-200))), [turns]);
 
   const { replies, failures } = useMemo(() => {
     const replies = new Map<string, string[]>();
@@ -88,6 +89,21 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
     }
   }, [tasks, turns, replies, failures]);
 
+  // Keep each answer inside the conversation so it survives leaving the page or closing the app.
+  useEffect(() => {
+    const changed = turns.some((turn) => {
+      const last = turn.attempts[turn.attempts.length - 1];
+      const live = last ? (replies.get(last.taskId) ?? []).join("\n\n") : "";
+      return live && live !== turn.answer;
+    });
+    if (!changed) return;
+    setTurns((all) => all.map((turn) => {
+      const last = turn.attempts[turn.attempts.length - 1];
+      const live = last ? (replies.get(last.taskId) ?? []).join("\n\n") : "";
+      return live && live !== turn.answer ? { ...turn, answer: live } : turn;
+    }));
+  }, [replies, turns]);
+
   function patchTurn(id: string, patch: Partial<Turn>) { setTurns((all) => all.map((t) => t.id === id ? { ...t, ...patch } : t)); }
 
   useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [turns.length, events.length]);
@@ -96,7 +112,7 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
     const prompt = text.trim();
     if (!prompt || !folder.trim() || busy) return;
     const id = crypto.randomUUID();
-    setTurns((t) => [...t, { id, prompt, route: null, attempts: [], error: null, notes: [] }]);
+    setTurns((t) => [...t, { id, prompt, route: null, attempts: [], error: null, notes: [], at: Date.now() }]);
     setText(""); setBusy(true);
     const update = (patch: Partial<Turn>) => patchTurn(id, patch);
     try {
@@ -113,6 +129,7 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
   return <div className="mx-auto flex h-[calc(100vh-3rem)] max-w-3xl flex-col">
     <div className="flex flex-wrap items-center gap-2 pb-3 text-xs">
       <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2"><FolderOpen size={14} className="shrink-0 text-muted" /><input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Pasta do projeto (ex.: C:\Projetos\meu-app)" className="min-w-0 flex-1 bg-transparent outline-none" /></label>
+      {turns.length > 0 && <button onClick={() => setTurns([])} className="flex items-center gap-1.5 rounded-lg border border-line bg-panel px-3 py-2 text-slate-300 hover:text-white" title="Começar uma conversa nova"><Plus size={13} />Nova conversa</button>}
       <div className="flex rounded-lg border border-line bg-panel p-0.5" title="Econômico gasta menos; Caprichado gasta mais e capricha mais">
         {(Object.keys(qualityLabel) as Quality[]).map((q) => <button key={q} onClick={() => setQuality(q)} className={`rounded-md px-3 py-1.5 ${quality === q ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white"}`}>{qualityLabel[q]}</button>)}
       </div>
@@ -124,20 +141,24 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
         const last = turn.attempts[turn.attempts.length - 1];
         const taskId = last && last.taskId !== "pending" ? last.taskId : null;
         const task = tasks.find((t) => t.task_id === taskId);
-        const reply = taskId ? (replies.get(taskId) ?? []).join("\n\n") : "";
-        const running = !turn.error && taskId && (!task || !finished.includes(task.status));
+        const reply = (taskId ? (replies.get(taskId) ?? []).join("\n\n") : "") || turn.answer || "";
+        const running = !turn.error && taskId && (task ? !finished.includes(task.status) : !turn.answer);
+        const stale = !task && !reply && !turn.error && Date.now() - (turn.at ?? 0) > 120_000;
         const provider = last?.provider ?? turn.route?.provider;
+        const b = provider ? brand[provider] : null;
+        const model = provider && provider === turn.route?.provider && turn.route?.model ? turn.route.model : "modelo padrão";
+        const effort = turn.route ? (effortName[turn.route.effort] ?? turn.route.effort) : "";
         return <div key={turn.id} className="space-y-3">
           <div className="ml-auto w-fit max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-slate-700 px-4 py-2.5 text-sm">{turn.prompt}</div>
-          <div className="max-w-[95%] rounded-2xl rounded-bl-sm border border-line bg-panel px-4 py-3 text-sm">
+          <div className="max-w-[95%] rounded-2xl rounded-bl-sm border px-4 py-3 text-sm" style={{ borderColor: b ? b.color + "66" : undefined, background: b ? b.soft : undefined }}>
             {turn.notes.map((note, i) => <p key={i} className="mb-1 text-[11px] text-amber-300">{note}</p>)}
-            {turn.route && provider && <p className="mb-2 text-[11px] text-muted" title={turn.route.rationale.join("\n")}>{names[provider]}{provider === turn.route.provider && turn.route.model ? ` · ${turn.route.model}` : ""} · modo {effortName[turn.route.effort] ?? turn.route.effort}</p>}
+            {turn.route && provider && b && <div className="mb-2 flex flex-wrap items-center gap-2 text-[11px]" title={turn.route.rationale.join("\n")}><ProviderMark provider={provider} size={16} /><span className="font-semibold" style={{ color: b.color }}>{b.name}</span><span className="rounded-full border border-line px-2 py-0.5 text-slate-300">{model}</span><span className="rounded-full border border-line px-2 py-0.5 text-slate-300">esforço {effort}</span></div>}
             {turn.error ? <p className="text-rose-300">Não deu certo: {turn.error}</p>
               : reply ? <p className="whitespace-pre-wrap leading-relaxed">{reply}</p>
-              : task && finished.includes(task.status) ? <p className="text-muted">A IA terminou sem enviar resposta em texto.</p>
+              : (task && finished.includes(task.status)) || stale ? <p className="text-muted">A IA terminou sem enviar resposta em texto.</p>
               : <p className="text-muted">{turn.route ? "Trabalhando…" : "Escolhendo a melhor IA…"}</p>}
             {task?.status === "awaiting_approval" && <p className="mt-2 text-xs text-violet-300">A IA está pedindo permissão — veja em "Pedidos de permissão".</p>}
-                                    {running && taskId && <button onClick={() => void cancelTask(taskId)} className="mt-2 flex items-center gap-1 text-[11px] text-slate-400 hover:text-white"><Square size={10} />Parar</button>}
+                                    {running && !stale && taskId && <button onClick={() => void cancelTask(taskId)} className="mt-2 flex items-center gap-1 text-[11px] text-slate-400 hover:text-white"><Square size={10} />Parar</button>}
           </div>
         </div>;
       })}

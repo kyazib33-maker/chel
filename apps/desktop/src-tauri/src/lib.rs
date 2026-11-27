@@ -1,3 +1,4 @@
+mod skills;
 use antigravity_adapter::{
     build_process_spec as build_antigravity_spec, default_cache_path, read_workspace_conversation,
     AntigravityRequest,
@@ -1408,6 +1409,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_agent_task, cancel_task, list_tasks,
+            skills::list_skills, skills::import_skills,
             remember_project_memory, search_project_memory, list_project_memory, delete_project_memory,
             list_model_pricing, configure_model_pricing, estimate_model_cost, compile_and_save_delegation_workflow, verify_audit_journal,
             create_worktree, list_worktrees, remove_worktree,
