@@ -51,7 +51,7 @@ export default function Connect() {
       {!scanning ? <Pressable onPress={async () => { if (!permission?.granted) { const r = await requestPermission(); if (!r.granted) { if (!r.canAskAgain) void Linking.openSettings(); return; } } setScanning(true); }} className="items-center rounded-xl border border-line py-3.5"><Text className="text-[14px] text-zinc-200">Ler o QR Code com a câmera</Text></Pressable>
         : <View className="overflow-hidden rounded-xl border border-line"><CameraView style={{ height: 280, width: "100%" }} facing="back" barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
           onBarcodeScanned={({ data }) => { if (lock.current) return; lock.current = true; setScanning(false); void run(() => connectWithQr(data, name.trim() || "Android")); }} /></View>}
-      <Text className="mt-6 text-[11px] leading-5 text-muted">Funciona no mesmo Wi-Fi do computador. Para usar fora de casa, instale o Tailscale no PC e no celular e use o código marcado “Tailscale”. O código vale 3 minutos e serve uma vez.</Text>
+      <Text className="mt-6 text-[11px] leading-5 text-muted">A conexão é sempre pelo Tailscale: instale o app Tailscale no celular e entre na mesma conta do PC. Funciona em casa ou fora. O código vale 3 minutos e serve uma vez.</Text>
     </ScrollView>
   </KeyboardAvoidingView>;
 }

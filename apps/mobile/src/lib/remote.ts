@@ -30,15 +30,10 @@ function validateHostEndpoint(value: string): string {
   const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   const octets = host.split(".").map((part) => /^\d{1,3}$/.test(part) ? Number(part) : NaN);
   const isIpv4 = octets.length === 4 && octets.every((part) => Number.isInteger(part) && part >= 0 && part <= 255);
-  const isPrivateIpv4 = isIpv4 && (
-    octets[0] === 10 ||
-    (octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31) ||
-    (octets[0] === 192 && octets[1] === 168) ||
-    (octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127)
-  );
-  const isPrivateIpv6 = host.includes(":") && (host === "::1" || host.startsWith("fc") || host.startsWith("fd"));
-  if (!isPrivateIpv4 && !isPrivateIpv6) {
-    throw new Error("O endpoint precisa ser um IP privado da LAN ou Tailscale.");
+  // Chel only talks to the computer through Tailscale (100.64.0.0/10).
+  const isTailscale = isIpv4 && octets[0] === 100 && octets[1] >= 64 && octets[1] <= 127;
+  if (!isTailscale) {
+    throw new Error("Esse código não é de um endereço Tailscale. Ligue o Tailscale no PC e no celular e gere um código novo.");
   }
   return url.origin;
 }
@@ -177,7 +172,7 @@ export async function pairWithCode(code: string, deviceName: string): Promise<Re
     await SecureStore.setItemAsync(CONNECTION_KEY, JSON.stringify(connection));
     return connection;
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") throw new Error("O computador não respondeu. Confira se o celular está no mesmo Wi-Fi (ou no Tailscale) e se o Chel está aberto.");
+    if (error instanceof Error && error.name === "AbortError") throw new Error("O computador não respondeu. Confira se o Tailscale está ligado no celular e no PC, e se o Chel está aberto.");
     throw error;
   } finally { clearTimeout(timeout); }
 }

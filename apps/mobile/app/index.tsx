@@ -36,7 +36,7 @@ export default function Conversations() {
       <IconButton label="⚡" onPress={() => router.push("/activity")} />
       <IconButton label="⚙" onPress={() => router.push("/connect")} />
     </View>
-    {status === "offline" && <Text className="mx-4 mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">Não consegui falar com o PC. O Chel está aberto e o celular no mesmo Wi-Fi? {error ? `(${error})` : ""}</Text>}
+    {status === "offline" && <Text className="mx-4 mb-2 rounded-lg bg-amber-500/10 px-3 py-2 text-[12px] text-amber-200">Não consegui falar com o PC. O Chel está aberto e o Tailscale ligado no celular? {error ? `(${error})` : ""}</Text>}
     {state.working.length > 0 && <Pressable onPress={() => router.push("/activity")} className="mx-4 mb-2 flex-row items-center gap-2 rounded-xl border border-line bg-panel px-3 py-2.5">
       {state.working.slice(0, 3).map((w) => w.provider ? <Text key={w.task_id} style={{ color: brand[w.provider].color }}>{brand[w.provider].glyph}</Text> : null)}
       <Text className="flex-1 text-[13px] text-zinc-300">{state.working.length} IA(s) trabalhando</Text><Text className="text-muted">›</Text>

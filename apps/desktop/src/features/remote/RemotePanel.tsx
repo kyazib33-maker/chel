@@ -62,7 +62,7 @@ export default function RemotePanel() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${on ? "bg-emerald-400/15 text-emerald-300" : "bg-raised text-muted"}`}><Smartphone size={19} /></div>
-          <div><p className="text-sm font-semibold">{on ? "Acesso pelo celular ligado" : "Acesso pelo celular desligado"}</p><p className="text-xs text-muted">{on ? "Celulares conectados conseguem usar suas conversas." : "Ligue para gerar um código de conexão."}</p></div>
+          <div><p className="text-sm font-semibold">{on ? "Acesso pelo celular ligado" : "Acesso pelo celular desligado"}</p><p className="text-xs text-muted">{on ? "Celulares conectados pelo Tailscale usam suas conversas." : "Precisa do Tailscale ligado neste PC."}</p></div>
         </div>
         {on ? <button disabled={busy} onClick={() => void turnOff()} className="flex items-center gap-2 rounded-lg border border-line px-3.5 py-2 text-xs text-zinc-300 transition hover:bg-raised disabled:opacity-50"><Power size={13} />Desligar</button>
           : <button disabled={busy || !desktopBridgeAvailable} onClick={() => void turnOn()} className="flex items-center gap-2 rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-900 transition hover:bg-white disabled:opacity-50"><Power size={13} />{busy ? "Ligando…" : "Ligar e gerar código"}</button>}
@@ -83,13 +83,13 @@ export default function RemotePanel() {
                   {copied === c.code ? <Check size={15} className="text-emerald-400" /> : <Copy size={15} className="text-muted group-hover:text-zinc-300" />}
                 </button>
               </div>)}
-              {(pairing.short_codes ?? []).length === 0 && <p className="text-sm text-amber-300">Não encontrei um endereço de rede deste PC. Confira se está conectado ao Wi-Fi.</p>}
+              {(pairing.short_codes ?? []).length === 0 && <p className="text-sm text-amber-300">Não encontrei o endereço Tailscale deste PC. Confira se o Tailscale está ligado.</p>}
             </div>
             <p className="mt-4 text-[11px] text-muted">Vale por mais {Math.floor(secondsLeft / 60)}:{String(secondsLeft % 60).padStart(2, "0")} · só serve uma vez · 5 erros invalidam o código.</p>
           </div>
           <div className="text-center"><div className="rounded-2xl bg-white p-2.5"><QRCodeSVG value={pairing.qr_payload} size={150} level="M" /></div><p className="mt-2 text-[11px] text-muted">ou leia o QR</p></div>
         </div>}
-        <p className="mt-6 rounded-xl bg-raised/60 px-4 py-3 text-[11px] leading-relaxed text-muted">Funciona com o celular na <b className="text-zinc-300">mesma rede Wi-Fi</b>. Para usar fora de casa, instale o <b className="text-zinc-300">Tailscale</b> no PC e no celular: aparece um segundo código que funciona de qualquer lugar. Não abra portas no roteador.</p>
+        <p className="mt-6 rounded-xl bg-raised/60 px-4 py-3 text-[11px] leading-relaxed text-muted">A conexão é <b className="text-zinc-300">sempre pelo Tailscale</b>, cifrada, em casa ou fora. No celular, instale o app Tailscale e entre na mesma conta deste PC.</p>
       </div>}
     </section>
 

@@ -324,8 +324,11 @@ impl RemoteServer {
             .join("workflow-checkpoints");
         let devices = DeviceStore::open(db_path)?;
         let mut process_events = processes.subscribe();
+        // Phones may only reach Chel through Tailscale: never listen on the Wi-Fi/LAN address.
         let bind_ip = if config.enable_lan {
-            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+            tailscale_address().await.ok_or_else(|| RemoteServerError::Bind(
+                "O Tailscale não está ligado neste computador. Instale o Tailscale (tailscale.com/download), entre na sua conta e tente de novo.".into(),
+            ))?
         } else {
             IpAddr::V4(Ipv4Addr::LOCALHOST)
         };
@@ -336,14 +339,14 @@ impl RemoteServer {
         let actual_addr = listener
             .local_addr()
             .map_err(|error| RemoteServerError::Bind(error.to_string()))?;
-        let endpoints = advertised_endpoints(config.enable_lan, actual_addr.port()).await;
+        let endpoints = vec![format!("http://{}:{}", actual_addr.ip(), actual_addr.port())];
         let info = RemoteServerInfo {
             running: true,
             port: actual_addr.port(),
             lan_enabled: config.enable_lan,
             endpoints,
             security_notice: if config.enable_lan {
-                "Acesso LAN habilitado explicitamente. HTTP não cifra o tráfego; prefira Tailscale em redes não confiáveis e não encaminhe esta porta para a Internet.".into()
+                "Acesso remoto somente pelo Tailscale: o Chel escuta apenas no endereço Tailscale deste computador, e o tráfego viaja cifrado pela rede do Tailscale.".into()
             } else {
                 "Servidor restrito a localhost; dispositivos móveis não conseguem acessá-lo até habilitar LAN/Tailscale.".into()
             },
@@ -464,8 +467,8 @@ impl RemoteServer {
             let rest = endpoint.strip_prefix("http://")?;
             let (host, port) = rest.rsplit_once(':')?;
             let ip: Ipv4Addr = host.parse().ok()?;
-            if ip.is_loopback() { return None; }
-            let label = if ip.octets()[0] == 100 && (64..=127).contains(&ip.octets()[1]) { "Tailscale (de qualquer lugar)" } else { "Mesma rede Wi-Fi" };
+            if !is_tailscale_ip(&IpAddr::V4(ip)) { return None; }
+            let label = "Tailscale";
             Some(ShortCode { label: label.into(), endpoint: endpoint.clone(), code: short_pairing_code(ip, port.parse().ok()?, secret) })
         }).collect();
         let payload = serde_json::json!({
@@ -1798,44 +1801,28 @@ fn canonical_or_original(path: PathBuf) -> PathBuf {
     std::fs::canonicalize(&path).unwrap_or(path)
 }
 
-async fn advertised_endpoints(enable_lan: bool, port: u16) -> Vec<String> {
-    if !enable_lan {
-        return vec![format!("http://127.0.0.1:{port}")];
-    }
-    let mut addresses = Vec::<IpAddr>::new();
-    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
-        if socket.connect("192.0.2.1:80").is_ok() {
-            if let Ok(local) = socket.local_addr() {
-                addresses.push(local.ip());
-            }
-        }
-    }
-    // Tailscale's CLI is optional and may not be installed. Bound the probe so
-    // a broken CLI cannot delay starting the remote server indefinitely.
-    if let Ok(Ok(output)) = timeout(
-        Duration::from_secs(1),
-        tokio::process::Command::new("tailscale")
-            .args(["ip", "-4"])
-            .output(),
-    )
-    .await
-    {
-        if output.status.success() {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                if let Ok(address) = line.trim().parse::<IpAddr>() {
-                    if !addresses.contains(&address) {
-                        addresses.insert(0, address);
-                    }
+/// True for Tailscale's CGNAT range 100.64.0.0/10.
+pub fn is_tailscale_ip(ip: &IpAddr) -> bool {
+    matches!(ip, IpAddr::V4(v4) if v4.octets()[0] == 100 && (64..=127).contains(&v4.octets()[1]))
+}
+
+/// Finds this computer's Tailscale IPv4 address, if Tailscale is running.
+async fn tailscale_address() -> Option<IpAddr> {
+    let candidates = ["tailscale", r"C:\Program Files\Tailscale\tailscale.exe"];
+    for program in candidates {
+        if let Ok(Ok(output)) = timeout(Duration::from_secs(2), tokio::process::Command::new(program).args(["ip", "-4"]).output()).await {
+            if output.status.success() {
+                if let Some(ip) = String::from_utf8_lossy(&output.stdout).lines().filter_map(|l| l.trim().parse::<IpAddr>().ok()).find(is_tailscale_ip) {
+                    return Some(ip);
                 }
             }
         }
     }
-    addresses.dedup();
-    addresses
-        .into_iter()
-        .filter(|ip| !ip.is_loopback())
-        .map(|ip| format!("http://{ip}:{port}"))
-        .collect()
+    // Fallback without the CLI: the route to Tailscale's own service address goes through the Tailscale adapter.
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("100.100.100.100:80").ok()?;
+    let ip = socket.local_addr().ok()?.ip();
+    is_tailscale_ip(&ip).then_some(ip)
 }
 
 #[cfg(test)]
@@ -2055,5 +2042,40 @@ mod chat_bridge_tests {
         assert!(server.state.pairing.lock().await.is_none());
         server.stop().await;
         let _ = std::fs::remove_file(temp);
+    }
+}
+
+#[cfg(test)]
+mod tailscale_only_tests {
+    use super::*;
+    #[test]
+    fn only_cgnat_range_counts_as_tailscale() {
+        assert!(is_tailscale_ip(&"100.101.5.9".parse().unwrap()));
+        assert!(!is_tailscale_ip(&"192.168.1.23".parse().unwrap()));
+        assert!(!is_tailscale_ip(&"100.128.0.1".parse().unwrap()));
+        assert!(!is_tailscale_ip(&"10.0.0.5".parse().unwrap()));
+    }
+    #[tokio::test]
+    async fn phone_access_never_uses_the_wifi_address() {
+        // On a machine without Tailscale, turning on phone access must fail instead of falling back to Wi-Fi.
+        match tailscale_address().await {
+            Some(ip) => assert!(is_tailscale_ip(&ip)),
+            None => {
+                let processes = ProcessManager::new(Default::default());
+                let temp = std::env::temp_dir().join(format!("chel-ts-{}.sqlite3", Uuid::new_v4()));
+                let result = RemoteServer::start(
+                    RemoteServerConfig { enable_lan: true, port: 0, allowed_root: std::env::temp_dir() },
+                    processes.clone(), UsageMonitor::default(), WorkflowStore::new(temp.with_extension("workflows")),
+                    WorkflowRunner::new(processes.clone(), workspace_manager::WorkspaceManager::new(temp.with_extension("worktrees"))),
+                    WorkflowRunStore::new(temp.with_extension("runs.json")),
+                    CodexApprovalBridge::new(CodexAppServerManager::default(), permission_engine::PermissionEngine::default()),
+                    ClaudeApprovalBridge::new(claude_code_adapter::ClaudeCodeManager::default(), permission_engine::PermissionEngine::default()),
+                    ClaudeCodeManager::default(), CodexAppServerManager::default(),
+                    SessionRegistry::open(temp.with_extension("sessions.json")).await.unwrap(),
+                    temp.clone(), ChatBridge::new(),
+                ).await;
+                assert!(matches!(result, Err(RemoteServerError::Bind(ref m)) if m.contains("Tailscale")));
+            }
+        }
     }
 }
