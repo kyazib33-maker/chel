@@ -5,7 +5,7 @@ import type { TaskEvent, TaskSnapshot, TaskStatus } from "../../lib/tauri";
 const columns: Array<{ id: string; title: string; statuses: TaskStatus[]; accent: string }> = [
   { id: "queue", title: "Na fila", statuses: ["queued", "starting"], accent: "text-amber-200" },
   { id: "running", title: "Executando", statuses: ["running", "cancelling"], accent: "text-emerald-200" },
-  { id: "approval", title: "Aguardando aprovação", statuses: ["awaiting_approval"], accent: "text-violet-200" },
+  { id: "approval", title: "Esperando seu OK", statuses: ["awaiting_approval"], accent: "text-violet-200" },
   { id: "completed", title: "Concluído", statuses: ["succeeded", "cancelled"], accent: "text-sky-200" },
   { id: "error", title: "Erro / Cota", statuses: ["failed", "quota_exceeded"], accent: "text-rose-200" },
 ];
@@ -13,7 +13,7 @@ const columns: Array<{ id: string; title: string; statuses: TaskStatus[]; accent
 const providerLabel = { claude_code: "Claude Code", codex: "Codex CLI", antigravity: "Antigravity" };
 const statusLabel: Record<TaskStatus, string> = {
   queued: "Na fila", starting: "Iniciando", running: "Executando", cancelling: "Interrompendo",
-  awaiting_approval: "Aguardando aprovação", succeeded: "Concluído", failed: "Erro", quota_exceeded: "Cota atingida", cancelled: "Cancelado",
+  awaiting_approval: "Esperando seu OK", succeeded: "Concluído", failed: "Erro", quota_exceeded: "Cota atingida", cancelled: "Cancelado",
 };
 
 function elapsed(task: TaskSnapshot, now: number): string {
@@ -43,9 +43,8 @@ export default function TaskBoard({ tasks, events, onStop }: { tasks: TaskSnapsh
 
   return (
     <div className="space-y-5">
-      <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-[11px] uppercase tracking-[0.2em] text-muted">Live task orchestration</p><h1 className="mt-1 text-2xl font-semibold">Painel de agentes</h1><p className="mt-1 text-xs text-muted">Acompanhe filas, execução paralela, aprovações e resultados por tarefa.</p></div><span className="rounded-full border border-line px-3 py-1.5 text-[10px] text-muted">{activeCount} ativos · pool paralelo</span></div>
 
-      <div className="grid gap-3 sm:grid-cols-3"><Metric label="Tarefas" value={String(tasks.length)} icon={<ListTree size={15} />} /><Metric label="Em andamento" value={String(activeCount)} icon={<Activity size={15} />} /><Metric label="Eventos recebidos" value={String(events.length)} icon={<TerminalSquare size={15} />} /></div>
+      <div className="grid gap-3 sm:grid-cols-3"><Metric label="Pedidos feitos" value={String(tasks.length)} icon={<ListTree size={15} />} /><Metric label="Em andamento" value={String(activeCount)} icon={<Activity size={15} />} /><Metric label="Mensagens das IAs" value={String(events.length)} icon={<TerminalSquare size={15} />} /></div>
 
       <div className="grid gap-3 2xl:grid-cols-5 xl:grid-cols-3 md:grid-cols-2">
         {columns.map((column) => {
@@ -74,7 +73,7 @@ export default function TaskBoard({ tasks, events, onStop }: { tasks: TaskSnapsh
       </div>
 
       {splitIds.length > 0 && <section className="rounded-xl border border-line bg-panel">
-        <div className="flex items-center justify-between border-b border-line px-4 py-3"><div><h2 className="text-xs font-semibold">Split View</h2><p className="mt-1 text-[10px] text-muted">Acompanhe até quatro streams em paralelo.</p></div><button onClick={() => setSplitIds([])} className="text-[10px] text-slate-500 hover:text-slate-100">Limpar seleção</button></div>
+        <div className="flex items-center justify-between border-b border-line px-4 py-3"><div><h2 className="text-xs font-semibold">Ver lado a lado</h2><p className="mt-1 text-[10px] text-muted">Escolha até 4 tarefas para acompanhar ao mesmo tempo.</p></div><button onClick={() => setSplitIds([])} className="text-[10px] text-slate-500 hover:text-slate-100">Limpar seleção</button></div>
         <div className={`grid gap-2 p-3 ${splitIds.length === 1 ? "grid-cols-1" : splitIds.length === 2 ? "md:grid-cols-2" : "md:grid-cols-2 xl:grid-cols-4"}`}>{splitIds.map((id) => {
           const task = tasks.find((item) => item.task_id === id);
           if (!task) return null;
