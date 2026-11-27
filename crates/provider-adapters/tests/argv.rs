@@ -10,6 +10,7 @@ fn request(provider: ProviderId) -> AgentLaunchRequest {
         model: Some("model-test".into()),
         effort: Some("HIGH".into()),
         display_name: Some("Backend agent".into()),
+        resume_id: None,
     }
 }
 

@@ -36,6 +36,7 @@ export interface AgentLaunchRequest {
   model?: string | null;
   effort?: string | null;
   display_name?: string | null;
+  resume_id?: string | null;
 }
 
 export type TaskEventPayload =

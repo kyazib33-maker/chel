@@ -1022,6 +1022,7 @@ async fn execute_node(
         model: node.model.clone(),
         effort: node.effort.clone(),
         display_name: Some(node.name.clone()),
+        resume_id: None,
     };
     let spec = build_process_spec(request).map_err(|e| RunnerError::Node {
         node: node.id.clone(),

@@ -38,15 +38,21 @@ fn sources() -> Vec<(&'static str, PathBuf)> {
         ("Claude", h.join(".claude").join("skills")),
         ("Codex", h.join(".codex").join("skills")),
         ("Compartilhada", h.join(".agents").join("skills")),
+        ("Antigravity", h.join(".gemini").join("config").join("skills")),
         ("Antigravity", h.join(".gemini").join("antigravity-cli").join("builtin").join("skills")),
     ]
 }
 
-/// Folders Psylium shares its library into. `~/.agents/skills` is the shared
-/// location read by Codex and other agent CLIs; Claude reads `~/.claude/skills`.
+/// Folders Psylium shares its library into: each AI's own global skills
+/// folder, plus `~/.agents/skills`, the shared location other agent CLIs read.
 fn targets() -> Vec<PathBuf> {
     let h = home();
-    vec![h.join(".claude").join("skills"), h.join(".agents").join("skills")]
+    vec![
+        h.join(".claude").join("skills"),
+        h.join(".codex").join("skills"),
+        h.join(".gemini").join("config").join("skills"),
+        h.join(".agents").join("skills"),
+    ]
 }
 
 fn skill_dirs(root: &Path) -> Vec<PathBuf> {

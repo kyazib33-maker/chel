@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, Plus, Send, Sparkles, Square } from "lucide-react";
 import { brand, effortName, ProviderMark } from "../../lib/providers";
-import { cancelTask, desktopBridgeAvailable, launchAgent, recommendAgentRoute, type ProviderId, type RouteRecommendation, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
+import { cancelTask, desktopBridgeAvailable, launchAgent, readQuotas, recommendAgentRoute, type ProviderQuota, type ProviderId, type RouteRecommendation, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
 
 type Quality = "economy" | "balanced" | "maximum";
-type Attempt = { provider: ProviderId; taskId: string };
+type Attempt = { provider: ProviderId; taskId: string; sessionId?: string };
 type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[]; at: number; answer?: string };
 
 const names: Record<ProviderId, string> = { claude_code: "Claude", codex: "Codex", antigravity: "Antigravity" };
@@ -23,6 +23,19 @@ function failureText(line: string): string | null {
     try { const data = JSON.parse(trimmed); return data.event === "result" && data.result?.error ? data.result.error : data.type === "result" && data.is_error ? (data.result ?? null) : null; } catch { return null; }
   }
   return /quota|limit|rate|unauthori|login|not logged/i.test(trimmed) && !trimmed.startsWith("AGY_ERROR") ? trimmed.replace(/^error:\s*/i, "") : null;
+}
+
+/** The CLI's own conversation id, used to continue the same conversation next time. */
+function sessionIdOf(line: string): string | null {
+  const t = line.trim();
+  if (!t.startsWith("{")) return null;
+  try {
+    const d = JSON.parse(t);
+    if (d.type === "system" && d.subtype === "init" && d.session_id) return d.session_id;
+    if (d.type === "thread.started" && d.thread_id) return d.thread_id;
+    if (d.event === "init" && d.conversation_id) return d.conversation_id;
+    return null;
+  } catch { return null; }
 }
 
 function readableText(line: string): string | null {
@@ -49,24 +62,37 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
   const [turns, setTurns] = useState<Turn[]>(() => { try { return JSON.parse(load("psylium.chat", "[]")) as Turn[]; } catch { return []; } });
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
+  const quotaCache = useRef<{ at: number; list: ProviderQuota[] } | null>(null);
+
+  /** Which AIs still have usage left (cached for 2 minutes; unknown counts as available). */
+  async function availability(): Promise<(p: ProviderId) => boolean> {
+    if (!quotaCache.current || Date.now() - quotaCache.current.at > 120_000) {
+      try { quotaCache.current = { at: Date.now(), list: await readQuotas() }; } catch { quotaCache.current = { at: Date.now(), list: [] }; }
+    }
+    const list = quotaCache.current.list;
+    return (p) => { const q = list.find((x) => x.provider === p); return !q || q.error !== null || q.available; };
+  }
 
   useEffect(() => save("psylium.folder", folder), [folder]);
   useEffect(() => save("psylium.quality", quality), [quality]);
   useEffect(() => save("psylium.chat", JSON.stringify(turns.slice(-200))), [turns]);
 
-  const { replies, failures } = useMemo(() => {
+  const { replies, failures, sessions } = useMemo(() => {
     const replies = new Map<string, string[]>();
     const failures = new Map<string, string>();
+    const sessions = new Map<string, string>();
     for (const event of events) {
       if (event.payload.type !== "output") continue;
       const line = event.payload.data.line;
+      const sid = sessionIdOf(line);
+      if (sid) { sessions.set(event.task_id, sid); continue; }
       const why = failureText(line);
       if (why) { failures.set(event.task_id, why); continue; }
       if (event.payload.data.stream !== "stdout") continue;
       const piece = readableText(line);
       if (piece) replies.set(event.task_id, [...(replies.get(event.task_id) ?? []), piece]);
     }
-    return { replies, failures };
+    return { replies, failures, sessions };
   }, [events]);
 
   // When an AI fails before answering (quota, login, crash), hand the message to the next AI in line.
@@ -77,7 +103,8 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
       const task = tasks.find((t) => t.task_id === last.taskId);
       if (!task || !["failed", "quota_exceeded"].includes(task.status) || replies.get(last.taskId)?.length) continue;
       const tried = turn.attempts.map((a) => a.provider);
-      const next = turn.route.fallback_order.find((p) => !tried.includes(p));
+      const has = quotaCache.current?.list ?? [];
+      const next = turn.route.fallback_order.find((p) => !tried.includes(p) && !has.some((q) => q.provider === p && q.error === null && !q.available));
       const why = failures.get(last.taskId) ?? task.last_error ?? "erro desconhecido";
       if (!next) { patchTurn(turn.id, { error: `Nenhuma IA conseguiu responder. Último motivo: ${why}` }); continue; }
       const note = `${names[last.provider]} não conseguiu (${why}). Tentando com ${names[next]}…`;
@@ -94,15 +121,20 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
     const changed = turns.some((turn) => {
       const last = turn.attempts[turn.attempts.length - 1];
       const live = last ? (replies.get(last.taskId) ?? []).join("\n\n") : "";
-      return live && live !== turn.answer;
+      const sid = last ? sessions.get(last.taskId) : undefined;
+      return (live && live !== turn.answer) || (sid && sid !== last?.sessionId);
     });
     if (!changed) return;
     setTurns((all) => all.map((turn) => {
       const last = turn.attempts[turn.attempts.length - 1];
       const live = last ? (replies.get(last.taskId) ?? []).join("\n\n") : "";
-      return live && live !== turn.answer ? { ...turn, answer: live } : turn;
+      const sid = last ? sessions.get(last.taskId) : undefined;
+      let next = turn;
+      if (live && live !== turn.answer) next = { ...next, answer: live };
+      if (sid && last && sid !== last.sessionId) next = { ...next, attempts: next.attempts.map((a) => a === last ? { ...a, sessionId: sid } : a) };
+      return next;
     }));
-  }, [replies, turns]);
+  }, [replies, sessions, turns]);
 
   function patchTurn(id: string, patch: Partial<Turn>) { setTurns((all) => all.map((t) => t.id === id ? { ...t, ...patch } : t)); }
 
@@ -116,10 +148,28 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
     setText(""); setBusy(true);
     const update = (patch: Partial<Turn>) => patchTurn(id, patch);
     try {
+      const ok = await availability();
       const route = await recommendAgentRoute({ prompt, quality, preferred_provider: null, allow_antigravity: true });
-      update({ route });
-      const taskId = await launchAgent({ provider: route.provider, prompt, cwd: folder.trim(), model: route.model, effort: route.effort, display_name: `${names[route.provider]} · chat` });
-      update({ attempts: [{ provider: route.provider, taskId }] });
+      // Continue the conversation with the AI that answered last, if it still has quota.
+      const previous = [...turns].reverse().map((t) => t.attempts[t.attempts.length - 1]).find((a) => a?.sessionId);
+      let provider: ProviderId;
+      let resumeId: string | null = null;
+      const notes: string[] = [];
+      if (previous && ok(previous.provider)) {
+        provider = previous.provider; resumeId = previous.sessionId ?? null;
+      } else {
+        const order = [route.provider, ...route.fallback_order.filter((p) => p !== route.provider)];
+        const pick = order.find(ok);
+        if (!pick) { update({ route, error: "Todas as IAs estão sem cota agora. Veja no Painel quando cada uma volta." }); return; }
+        if (pick !== route.provider) notes.push(`${names[route.provider]} está sem cota; usando ${names[pick]}.`);
+        if (previous && previous.provider !== pick) notes.push(`${names[previous.provider]} está sem cota; a conversa continua com ${names[pick]}, sem o histórico anterior.`);
+        provider = pick;
+      }
+      const effort = validEffort[provider].includes(route.effort) ? route.effort : "medium";
+      const model = provider === route.provider ? route.model : null;
+      update({ route: { ...route, provider, model, effort }, notes });
+      const taskId = await launchAgent({ provider, prompt, cwd: folder.trim(), model, effort, display_name: `${names[provider]} · chat`, resume_id: resumeId });
+      update({ attempts: [{ provider, taskId }] });
     } catch (reason) { update({ error: String(reason) }); }
     finally { setBusy(false); }
   }

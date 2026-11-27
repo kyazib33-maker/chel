@@ -152,3 +152,7 @@ export const estimateModelCost = (provider: ProviderId, model: string, inputToke
   invoke<CostEstimateResponse>("estimate_model_cost", { provider, model, inputTokens, outputTokens, budget: budget ?? null });
 export const compileAndSaveDelegationWorkflow = (prompt: string, request: { prompt: string; preferred_provider: ProviderId | null; quality: "economy" | "balanced" | "maximum"; allow_antigravity: boolean }, projectPath?: string | null) =>
   invoke<WorkflowDefinition>("compile_and_save_delegation_workflow", { prompt, request, projectPath: projectPath ?? null });
+
+export type QuotaWindow = { label: string; remaining_pct: number; resets: string | null };
+export type ProviderQuota = { provider: ProviderId; available: boolean; windows: QuotaWindow[]; error: string | null };
+export const readQuotas = () => invoke<ProviderQuota[]>("read_quotas");

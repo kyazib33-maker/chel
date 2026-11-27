@@ -58,6 +58,9 @@ pub struct AgentLaunchRequest {
     pub effort: Option<String>,
     #[serde(default)]
     pub display_name: Option<String>,
+    /// Continue an earlier conversation of the same provider instead of starting fresh.
+    #[serde(default)]
+    pub resume_id: Option<String>,
 }
 
 #[derive(Debug, Clone)]

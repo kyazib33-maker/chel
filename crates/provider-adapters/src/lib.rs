@@ -32,6 +32,9 @@ pub fn build_process_spec(request: AgentLaunchRequest) -> Result<ProcessSpec, Ad
                 "--verbose".to_string(),
                 "--include-partial-messages".to_string(),
             ]);
+            if let Some(id) = request.resume_id.as_ref() {
+                args.extend(["--resume".into(), id.clone()]);
+            }
             if let Some(model) = request.model.as_ref() {
                 args.extend(["--model".into(), model.clone()]);
             }
@@ -53,6 +56,9 @@ pub fn build_process_spec(request: AgentLaunchRequest) -> Result<ProcessSpec, Ad
                     format!("model_reasoning_effort={}", effort.to_ascii_lowercase()),
                 ]);
             }
+            if let Some(id) = request.resume_id.as_ref() {
+                args.extend(["resume".into(), id.clone()]);
+            }
             args.push(request.prompt);
             "codex"
         }
@@ -63,6 +69,9 @@ pub fn build_process_spec(request: AgentLaunchRequest) -> Result<ProcessSpec, Ad
                 "--output-format".into(),
                 "stream-json".into(),
             ]);
+            if let Some(id) = request.resume_id.as_ref() {
+                args.extend(["--conversation".into(), id.clone()]);
+            }
             if let Some(model) = request.model.as_ref() {
                 args.extend(["--model".into(), model.clone()]);
             }
