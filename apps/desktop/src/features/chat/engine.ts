@@ -85,8 +85,8 @@ function content(d: Record<string, any>): string | null {
   return text || null;
 }
 
-/** Top-of-line models Chel never uses: it always stays economical. */
-const TOP_TIER = /fable|mythos|opus|astra|argon|ultra|\bpro\b|-max\b/i;
+/** Top-of-line models Chel never uses, to keep costs down (Claude: Fable/Mythos; GPT: Astra/Terra; Antigravity: Argon). */
+const TOP_TIER = /fable|mythos|astra|terra|argon/i;
 
 /** Effort follows how complex the request is, capped at "high". */
 export function effortFor(complexity: string | undefined): string {
@@ -97,7 +97,7 @@ export function effortFor(complexity: string | undefined): string {
 export function chooseModel(provider: ProviderId, complexity: string | undefined, catalog: ModelCatalog | null, quotas: ProviderQuota[]): { id: string | null; name: string } {
   const effort = effortFor(complexity);
   if (provider === "claude_code") {
-    const alias = complexity === "low" ? "haiku" : "sonnet";
+    const alias = complexity === "low" ? "haiku" : complexity === "high" ? "opus" : "sonnet";
     return { id: alias, name: prettyModel(alias) };
   }
   if (provider === "codex") {
@@ -112,7 +112,7 @@ export function chooseModel(provider: ProviderId, complexity: string | undefined
   const room = (family: string) => { const w = windows.filter((x) => x.label.startsWith(family)); return w.length === 0 || w.every((x) => x.remaining_pct > 0); };
   const candidates = room("Gemini")
     ? complexity === "high" ? [`gemini-4-hydrogen-${effort}`, `gemini-3.8-flash-${effort}`] : [`gemini-3.8-flash-${effort}`, `gemini-4-hydrogen-${effort}`]
-    : ["claude-sonnet-4-6"];
+    : complexity === "high" ? ["claude-opus-4-6-thinking", "claude-sonnet-4-6"] : ["claude-sonnet-4-6"];
   const found = candidates.map((c) => list.find((m) => m.id === c)).find(Boolean) ?? list[0];
   return found ? { id: found.id, name: found.name.replace(/\s*\((Thinking|Low|Medium|High|XHigh)\)$/i, "") } : { id: null, name: "Antigravity" };
 }
