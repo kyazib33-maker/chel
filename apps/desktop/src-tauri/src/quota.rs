@@ -78,31 +78,37 @@ fn window_name(mins: i64) -> String {
     match mins { m if m <= 300 => "Sessão (5 h)".into(), m if m <= 10080 => "Semana".into(), _ => "Mês".into() }
 }
 
+/// Sends one JSON-RPC request to `codex app-server` and returns its result.
+async fn codex_rpc(method: &str, params: Value) -> Result<Value, String> {
+    let mut cmd = build_cli_command("codex", &["app-server".to_string()], &tmp());
+    cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
+    let mut child = cmd.spawn().map_err(|e| format!("não encontrado ({e})"))?;
+    let mut stdin = child.stdin.take().ok_or("sem stdin")?;
+    let mut lines = BufReader::new(child.stdout.take().ok_or("sem stdout")?).lines();
+    let send = |v: Value| format!("{v}\n");
+    stdin.write_all(send(json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"psylium","title":"Psylium","version":env!("CARGO_PKG_VERSION")}}})).as_bytes()).await.map_err(|e| e.to_string())?;
+    let mut sent = false;
+    let reply = tokio::time::timeout(TIMEOUT, async {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            if v["id"] == 1 && !sent {
+                sent = true;
+                stdin.write_all(send(json!({"method":"initialized"})).as_bytes()).await.ok();
+                stdin.write_all(send(json!({"id":2,"method":method,"params":params})).as_bytes()).await.ok();
+            } else if v["id"] == 2 { return Some(v); }
+        }
+        None
+    }).await.map_err(|_| "não respondeu a tempo".to_string())?;
+    let _ = child.kill().await;
+    let v = reply.ok_or("sem resposta")?;
+    if let Some(err) = v.get("error") { return Err(err["message"].as_str().unwrap_or("erro").to_string()); }
+    Ok(v["result"].clone())
+}
+
 async fn codex() -> ProviderQuota {
     let result = async {
-        let mut cmd = build_cli_command("codex", &["app-server".to_string()], &tmp());
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).kill_on_drop(true);
-        let mut child = cmd.spawn().map_err(|e| format!("não encontrado ({e})"))?;
-        let mut stdin = child.stdin.take().ok_or("sem stdin")?;
-        let mut lines = BufReader::new(child.stdout.take().ok_or("sem stdout")?).lines();
-        let send = |v: Value| format!("{v}\n");
-        stdin.write_all(send(json!({"id":1,"method":"initialize","params":{"clientInfo":{"name":"psylium","title":"Psylium","version":env!("CARGO_PKG_VERSION")}}})).as_bytes()).await.map_err(|e| e.to_string())?;
-        let mut sent = false;
-        let reply = tokio::time::timeout(TIMEOUT, async {
-            while let Ok(Some(line)) = lines.next_line().await {
-                let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
-                if v["id"] == 1 && !sent {
-                    sent = true;
-                    stdin.write_all(send(json!({"method":"initialized"})).as_bytes()).await.ok();
-                    stdin.write_all(send(json!({"id":2,"method":"account/rateLimits/read","params":{"excludeResetCreditDetails":true}})).as_bytes()).await.ok();
-                } else if v["id"] == 2 { return Some(v); }
-            }
-            None
-        }).await.map_err(|_| "não respondeu a tempo".to_string())?;
-        let _ = child.kill().await;
-        let v = reply.ok_or("sem resposta")?;
-        if let Some(err) = v.get("error") { return Err(err["message"].as_str().unwrap_or("erro").to_string()); }
-        let limits = &v["result"]["rateLimits"];
+        let v = codex_rpc("account/rateLimits/read", json!({"excludeResetCreditDetails": true})).await?;
+        let limits = &v["rateLimits"];
         let mut windows = Vec::new();
         for key in ["primary", "secondary"] {
             let w = &limits[key];
@@ -136,14 +142,43 @@ async fn agy() -> ProviderQuota {
         Ok(out) => {
             let w = parse_agy(&out);
             let err = w.is_empty().then(|| "não informou o uso".to_string());
-            // Antigravity's default model is Gemini, so it is only usable without
-            // picking a model while the Gemini family has room.
-            let gemini: Vec<&QuotaWindow> = w.iter().filter(|x| x.label.starts_with("Gemini ·")).collect();
-            let available = err.is_none() && if gemini.is_empty() { w.iter().any(|x| x.remaining_pct > 0.0) } else { gemini.iter().all(|x| x.remaining_pct > 0.0) };
+            // Usable while any model family has room; the chat picks a model from that family.
+            let available = err.is_none() && w.iter().any(|x| x.remaining_pct > 0.0);
             ProviderQuota { provider: "antigravity".into(), available, windows: w, error: err }
         }
         Err(e) => summarize("antigravity", vec![], Some(e)),
     }
+}
+
+#[derive(Serialize, Clone)]
+pub struct ModelInfo { pub id: String, pub name: String }
+
+#[derive(Serialize, Clone, Default)]
+pub struct ModelCatalog {
+    pub codex_default: Option<String>,
+    pub codex: Vec<ModelInfo>,
+    pub antigravity: Vec<ModelInfo>,
+}
+
+/// Lists the models each CLI offers, so Psylium can pick one explicitly and show its real name.
+#[tauri::command]
+pub async fn model_catalog() -> ModelCatalog {
+    let codex = async {
+        let r = codex_rpc("model/list", json!({})).await.ok()?;
+        let list = r["data"].as_array()?.clone();
+        let default = list.iter().find(|m| m["isDefault"] == true).and_then(|m| m["id"].as_str()).map(String::from);
+        let models = list.iter().filter_map(|m| Some(ModelInfo { id: m["id"].as_str()?.into(), name: m["displayName"].as_str().unwrap_or_default().into() })).collect::<Vec<_>>();
+        Some((default, models))
+    };
+    let agy = async {
+        run("agy", &["models"]).await.ok().map(|out| out.lines().filter_map(|l| {
+            let (id, name) = l.split_once('\t')?;
+            Some(ModelInfo { id: id.trim().into(), name: name.trim().into() })
+        }).collect::<Vec<_>>()).unwrap_or_default()
+    };
+    let (c, a) = tokio::join!(codex, agy);
+    let (codex_default, codex) = c.unwrap_or_default();
+    ModelCatalog { codex_default, codex, antigravity: a }
 }
 
 #[tauri::command]
@@ -177,4 +212,11 @@ mod live {
     async fn read_all() {
         for q in super::read_quotas().await { println!("{}", serde_json::to_string(&q).unwrap()); }
     }
+}
+
+#[cfg(test)]
+mod live_models {
+    #[tokio::test]
+    #[ignore = "calls the real CLIs"]
+    async fn catalog() { println!("{}", serde_json::to_string(&super::model_catalog().await).unwrap()); }
 }

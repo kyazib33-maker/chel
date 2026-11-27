@@ -134,3 +134,13 @@ pub fn list_skills() -> Vec<SkillInfo> { scan() }
 
 #[tauri::command]
 pub fn import_skills() -> Result<ImportReport, String> { import_all() }
+
+/// Folder used when the user doesn't pick one: Documents\Psylium (created on demand).
+#[tauri::command]
+pub fn default_workspace() -> Result<String, String> {
+    let docs = home().join("Documents");
+    let base = if docs.is_dir() { docs } else { home() };
+    let dir = base.join("Psylium");
+    fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+    Ok(dir.display().to_string())
+}

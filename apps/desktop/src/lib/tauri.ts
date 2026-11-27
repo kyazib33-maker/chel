@@ -156,3 +156,7 @@ export const compileAndSaveDelegationWorkflow = (prompt: string, request: { prom
 export type QuotaWindow = { label: string; remaining_pct: number; resets: string | null };
 export type ProviderQuota = { provider: ProviderId; available: boolean; windows: QuotaWindow[]; error: string | null };
 export const readQuotas = () => invoke<ProviderQuota[]>("read_quotas");
+export const defaultWorkspace = () => invoke<string>("default_workspace");
+export type ModelInfo = { id: string; name: string };
+export type ModelCatalog = { codex_default: string | null; codex: ModelInfo[]; antigravity: ModelInfo[] };
+export const modelCatalog = () => invoke<ModelCatalog>("model_catalog");

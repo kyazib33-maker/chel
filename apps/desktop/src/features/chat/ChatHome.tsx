@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { FolderOpen, Plus, Send, Sparkles, Square } from "lucide-react";
 import { brand, effortName, ProviderMark } from "../../lib/providers";
-import { cancelTask, desktopBridgeAvailable, launchAgent, readQuotas, recommendAgentRoute, type ProviderQuota, type ProviderId, type RouteRecommendation, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
+import { cancelTask, defaultWorkspace, desktopBridgeAvailable, launchAgent, modelCatalog, readQuotas, type ModelCatalog, recommendAgentRoute, type ProviderQuota, type ProviderId, type RouteRecommendation, type TaskEvent, type TaskSnapshot } from "../../lib/tauri";
 
 type Quality = "economy" | "balanced" | "maximum";
-type Attempt = { provider: ProviderId; taskId: string; sessionId?: string };
-type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[]; at: number; answer?: string };
+type Attempt = { provider: ProviderId; taskId: string; sessionId?: string; model?: string | null; modelName?: string };
+type Turn = { id: string; prompt: string; route: RouteRecommendation | null; attempts: Attempt[]; error: string | null; notes: string[]; at: number; answer?: string; cwd?: string };
 
 const names: Record<ProviderId, string> = { claude_code: "Claude", codex: "Codex", antigravity: "Antigravity" };
 const qualityLabel: Record<Quality, string> = { economy: "Econômico", balanced: "Equilibrado", maximum: "Caprichado" };
@@ -38,6 +38,42 @@ function sessionIdOf(line: string): string | null {
   } catch { return null; }
 }
 
+/** "claude-sonnet-5-5" → "Sonnet 5.5", "claude-opus-4-6-thinking" → "Opus 4.6". */
+export function prettyModel(id: string): string {
+  const m = id.match(/^claude-([a-z]+)-(\d+)-(\d+)/);
+  if (m) return `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}.${m[3]}`;
+  if (/^(fable|opus|sonnet|haiku)$/.test(id)) return id[0].toUpperCase() + id.slice(1);
+  return id;
+}
+
+/** The model the CLI says it is running (Claude reports it in its first event). */
+function modelOf(line: string): string | null {
+  const t = line.trim();
+  if (!t.startsWith("{")) return null;
+  try { const d = JSON.parse(t); return d.type === "system" && d.subtype === "init" && typeof d.model === "string" ? d.model : null; } catch { return null; }
+}
+
+/** Picks an explicit model so the chat can always show which one is in use. */
+function chooseModel(provider: ProviderId, quality: Quality, effort: string, catalog: ModelCatalog | null, quotas: ProviderQuota[]): { id: string | null; name: string } {
+  if (provider === "claude_code") {
+    const alias = quality === "maximum" ? "opus" : quality === "economy" && effort === "low" ? "haiku" : "sonnet";
+    return { id: alias, name: prettyModel(alias) };
+  }
+  if (provider === "codex") {
+    const id = catalog?.codex_default ?? catalog?.codex[0]?.id ?? null;
+    return { id, name: catalog?.codex.find((m) => m.id === id)?.name ?? id ?? "Codex" };
+  }
+  const list = catalog?.antigravity ?? [];
+  const windows = quotas.find((q) => q.provider === "antigravity")?.windows ?? [];
+  const room = (family: string) => { const w = windows.filter((x) => x.label.startsWith(family)); return w.length === 0 || w.every((x) => x.remaining_pct > 0); };
+  const level = effort === "max" ? "xhigh" : effort;
+  let candidates: string[];
+  if (room("Gemini")) candidates = quality === "economy" ? [`gemini-3.8-flash-${level}`, `gemini-4-hydrogen-${level}`] : [`gemini-4-hydrogen-${level}`, `gemini-3.8-flash-${level}`];
+  else candidates = quality === "maximum" || effort === "high" || effort === "xhigh" || effort === "max" ? ["claude-opus-4-6-thinking", "claude-sonnet-4-6"] : ["claude-sonnet-4-6", "claude-opus-4-6-thinking"];
+  const found = candidates.map((c) => list.find((m) => m.id === c)).find(Boolean) ?? list[0];
+  return found ? { id: found.id, name: found.name.replace(/\s*\((Thinking|Low|Medium|High|XHigh)\)$/i, "") } : { id: null, name: "Antigravity" };
+}
+
 function readableText(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
@@ -63,6 +99,8 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
   const [busy, setBusy] = useState(false);
   const bottom = useRef<HTMLDivElement>(null);
   const quotaCache = useRef<{ at: number; list: ProviderQuota[] } | null>(null);
+  const catalog = useRef<ModelCatalog | null>(null);
+  useEffect(() => { if (desktopBridgeAvailable) void modelCatalog().then((c) => { catalog.current = c; }).catch(() => undefined); }, []);
 
   /** Which AIs still have usage left (cached for 2 minutes; unknown counts as available). */
   async function availability(): Promise<(p: ProviderId) => boolean> {
@@ -74,16 +112,22 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
   }
 
   useEffect(() => save("psylium.folder", folder), [folder]);
+  const [fallbackDir, setFallbackDir] = useState("");
+  useEffect(() => { if (desktopBridgeAvailable) void defaultWorkspace().then(setFallbackDir).catch(() => undefined); }, []);
+  const workDir = folder.trim() || fallbackDir;
   useEffect(() => save("psylium.quality", quality), [quality]);
   useEffect(() => save("psylium.chat", JSON.stringify(turns.slice(-200))), [turns]);
 
-  const { replies, failures, sessions } = useMemo(() => {
+  const { replies, failures, sessions, models } = useMemo(() => {
     const replies = new Map<string, string[]>();
     const failures = new Map<string, string>();
     const sessions = new Map<string, string>();
+    const models = new Map<string, string>();
     for (const event of events) {
       if (event.payload.type !== "output") continue;
       const line = event.payload.data.line;
+      const reported = modelOf(line);
+      if (reported) models.set(event.task_id, reported);
       const sid = sessionIdOf(line);
       if (sid) { sessions.set(event.task_id, sid); continue; }
       const why = failureText(line);
@@ -92,7 +136,7 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
       const piece = readableText(line);
       if (piece) replies.set(event.task_id, [...(replies.get(event.task_id) ?? []), piece]);
     }
-    return { replies, failures, sessions };
+    return { replies, failures, sessions, models };
   }, [events]);
 
   // When an AI fails before answering (quota, login, crash), hand the message to the next AI in line.
@@ -109,8 +153,9 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
       if (!next) { patchTurn(turn.id, { error: `Nenhuma IA conseguiu responder. Último motivo: ${why}` }); continue; }
       const note = `${names[last.provider]} não conseguiu (${why}). Tentando com ${names[next]}…`;
       const effort = validEffort[next].includes(turn.route.effort) ? turn.route.effort : "medium";
-      patchTurn(turn.id, { attempts: [...turn.attempts, { provider: next, taskId: "pending" }], notes: [...turn.notes, note] });
-      void launchAgent({ provider: next, prompt: turn.prompt, cwd: folder.trim(), model: null, effort, display_name: `${names[next]} · chat` })
+      const chosen = chooseModel(next, quality, effort, catalog.current, quotaCache.current?.list ?? []);
+      patchTurn(turn.id, { attempts: [...turn.attempts, { provider: next, taskId: "pending", model: chosen.id, modelName: chosen.name }], notes: [...turn.notes, note] });
+      void launchAgent({ provider: next, prompt: turn.prompt, cwd: turn.cwd || workDir, model: chosen.id, effort, display_name: `${names[next]} · chat` })
         .then((taskId) => setTurns((all) => all.map((t) => t.id === turn.id ? { ...t, attempts: t.attempts.map((a) => a.taskId === "pending" ? { ...a, taskId } : a) } : t)))
         .catch((reason) => patchTurn(turn.id, { error: String(reason) }));
     }
@@ -122,7 +167,8 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
       const last = turn.attempts[turn.attempts.length - 1];
       const live = last ? (replies.get(last.taskId) ?? []).join("\n\n") : "";
       const sid = last ? sessions.get(last.taskId) : undefined;
-      return (live && live !== turn.answer) || (sid && sid !== last?.sessionId);
+      const real = last ? models.get(last.taskId) : undefined;
+      return (live && live !== turn.answer) || (sid && sid !== last?.sessionId) || (real && prettyModel(real) !== last?.modelName);
     });
     if (!changed) return;
     setTurns((all) => all.map((turn) => {
@@ -132,9 +178,12 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
       let next = turn;
       if (live && live !== turn.answer) next = { ...next, answer: live };
       if (sid && last && sid !== last.sessionId) next = { ...next, attempts: next.attempts.map((a) => a === last ? { ...a, sessionId: sid } : a) };
+      const real = last ? models.get(last.taskId) : undefined;
+      const nextLast = next.attempts[next.attempts.length - 1];
+      if (real && nextLast && prettyModel(real) !== nextLast.modelName) next = { ...next, attempts: next.attempts.map((a, i) => i === next.attempts.length - 1 ? { ...a, modelName: prettyModel(real) } : a) };
       return next;
     }));
-  }, [replies, sessions, turns]);
+  }, [replies, sessions, models, turns]);
 
   function patchTurn(id: string, patch: Partial<Turn>) { setTurns((all) => all.map((t) => t.id === id ? { ...t, ...patch } : t)); }
 
@@ -142,16 +191,18 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
 
   async function send() {
     const prompt = text.trim();
-    if (!prompt || !folder.trim() || busy) return;
+    if (!prompt || !workDir || busy) return;
     const id = crypto.randomUUID();
-    setTurns((t) => [...t, { id, prompt, route: null, attempts: [], error: null, notes: [], at: Date.now() }]);
+    setTurns((t) => [...t, { id, prompt, route: null, attempts: [], error: null, notes: [], at: Date.now(), cwd: workDir }]);
     setText(""); setBusy(true);
     const update = (patch: Partial<Turn>) => patchTurn(id, patch);
     try {
       const ok = await availability();
+      if (!catalog.current) catalog.current = await modelCatalog().catch(() => null);
       const route = await recommendAgentRoute({ prompt, quality, preferred_provider: null, allow_antigravity: true });
       // Continue the conversation with the AI that answered last, if it still has quota.
-      const previous = [...turns].reverse().map((t) => t.attempts[t.attempts.length - 1]).find((a) => a?.sessionId);
+      // Only continue a conversation started in this same folder (the AIs store conversations per folder).
+      const previous = [...turns].reverse().filter((t) => (t.cwd ?? workDir) === workDir).map((t) => t.attempts[t.attempts.length - 1]).find((a) => a?.sessionId);
       let provider: ProviderId;
       let resumeId: string | null = null;
       const notes: string[] = [];
@@ -166,19 +217,19 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
         provider = pick;
       }
       const effort = validEffort[provider].includes(route.effort) ? route.effort : "medium";
-      const model = provider === route.provider ? route.model : null;
-      update({ route: { ...route, provider, model, effort }, notes });
-      const taskId = await launchAgent({ provider, prompt, cwd: folder.trim(), model, effort, display_name: `${names[provider]} · chat`, resume_id: resumeId });
-      update({ attempts: [{ provider, taskId }] });
+      const chosen = chooseModel(provider, quality, effort, catalog.current, quotaCache.current?.list ?? []);
+      update({ route: { ...route, provider, model: chosen.id, effort }, notes });
+      const taskId = await launchAgent({ provider, prompt, cwd: workDir, model: chosen.id, effort, display_name: `${names[provider]} · chat`, resume_id: resumeId });
+      update({ attempts: [{ provider, taskId, model: chosen.id, modelName: chosen.name }] });
     } catch (reason) { update({ error: String(reason) }); }
     finally { setBusy(false); }
   }
 
-  const ready = desktopBridgeAvailable && folder.trim() !== "";
+  const ready = desktopBridgeAvailable && workDir !== "";
 
   return <div className="mx-auto flex h-[calc(100vh-3rem)] max-w-3xl flex-col">
     <div className="flex flex-wrap items-center gap-2 pb-3 text-xs">
-      <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2"><FolderOpen size={14} className="shrink-0 text-muted" /><input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="Pasta do projeto (ex.: C:\Projetos\meu-app)" className="min-w-0 flex-1 bg-transparent outline-none" /></label>
+      <label className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-line bg-panel px-3 py-2"><FolderOpen size={14} className="shrink-0 text-muted" /><input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder={fallbackDir ? `Pasta (opcional) — sem escolher, uso ${fallbackDir}` : "Pasta do projeto (opcional)"} className="min-w-0 flex-1 bg-transparent outline-none" /></label>
       {turns.length > 0 && <button onClick={() => setTurns([])} className="flex items-center gap-1.5 rounded-lg border border-line bg-panel px-3 py-2 text-slate-300 hover:text-white" title="Começar uma conversa nova"><Plus size={13} />Nova conversa</button>}
       <div className="flex rounded-lg border border-line bg-panel p-0.5" title="Econômico gasta menos; Caprichado gasta mais e capricha mais">
         {(Object.keys(qualityLabel) as Quality[]).map((q) => <button key={q} onClick={() => setQuality(q)} className={`rounded-md px-3 py-1.5 ${quality === q ? "bg-slate-700 text-white" : "text-slate-400 hover:text-white"}`}>{qualityLabel[q]}</button>)}
@@ -186,7 +237,7 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
     </div>
 
     <div className="flex-1 space-y-5 overflow-y-auto py-4">
-      {turns.length === 0 && <div className="mt-24 text-center"><Sparkles className="mx-auto text-accent" /><h2 className="mt-3 text-xl font-semibold">O que você quer fazer?</h2><p className="mt-2 text-sm text-muted">Escreva normalmente. O Psylium escolhe a IA e o modelo certos para gastar pouco e entregar bem.</p>{!folder.trim() && <p className="mt-4 text-xs text-amber-300">Primeiro, escolha a pasta do projeto ali em cima.</p>}</div>}
+      {turns.length === 0 && <div className="mt-24 text-center"><Sparkles className="mx-auto text-accent" /><h2 className="mt-3 text-xl font-semibold">O que você quer fazer?</h2><p className="mt-2 text-sm text-muted">Escreva normalmente. O Psylium escolhe a IA e o modelo certos para gastar pouco e entregar bem.</p><p className="mt-4 text-xs text-muted">Quer que a IA mexa num projeto seu? Escolha a pasta ali em cima. Se não escolher, ela trabalha na pasta Psylium dos seus Documentos.</p></div>}
       {turns.map((turn) => {
         const last = turn.attempts[turn.attempts.length - 1];
         const taskId = last && last.taskId !== "pending" ? last.taskId : null;
@@ -196,7 +247,7 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
         const stale = !task && !reply && !turn.error && Date.now() - (turn.at ?? 0) > 120_000;
         const provider = last?.provider ?? turn.route?.provider;
         const b = provider ? brand[provider] : null;
-        const model = provider && provider === turn.route?.provider && turn.route?.model ? turn.route.model : "modelo padrão";
+        const model = last?.modelName ?? (turn.route?.model ? prettyModel(turn.route.model) : "…");
         const effort = turn.route ? (effortName[turn.route.effort] ?? turn.route.effort) : "";
         return <div key={turn.id} className="space-y-3">
           <div className="ml-auto w-fit max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-sm bg-slate-700 px-4 py-2.5 text-sm">{turn.prompt}</div>
@@ -216,7 +267,7 @@ export default function ChatHome({ tasks, events }: { tasks: TaskSnapshot[]; eve
     </div>
 
     <div className="flex items-end gap-2 rounded-2xl border border-line bg-panel p-2">
-      <textarea value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} rows={2} placeholder={ready ? "Escreva sua mensagem…  (Enter envia, Shift+Enter quebra linha)" : desktopBridgeAvailable ? "Escolha a pasta do projeto primeiro" : "Abra pelo app instalado para conversar"} className="max-h-48 min-h-[44px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none" />
+      <textarea value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void send(); } }} rows={2} placeholder={ready ? "Escreva sua mensagem…  (Enter envia, Shift+Enter quebra linha)" : desktopBridgeAvailable ? "Preparando…" : "Abra pelo app instalado para conversar"} className="max-h-48 min-h-[44px] flex-1 resize-none bg-transparent px-2 py-1.5 text-sm outline-none" />
       <button disabled={!ready || busy || !text.trim()} onClick={() => void send()} className="rounded-xl bg-accent p-3 text-zinc-950 disabled:opacity-40" title="Enviar"><Send size={16} /></button>
     </div>
   </div>;
